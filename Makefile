@@ -9,10 +9,10 @@ incdir = inc
 CC = gcc
 
 # Options obligatoires pour la compilation correcte
-CXXFLAGS = -D_XOPEN_SOURCE=500 -I$(incdir) -pthread
+MCFLAGS = -D_XOPEN_SOURCE=500 -I$(incdir) -pthread
 
-# Options de compilation supplémentaires
-CFLAGS = -std=c11 -O2 -Wall -Wconversion -Werror -Wextra -Wpedantic \
+# Toutes les options de compilation
+CFLAGS = $(MCFLAGS) -std=c11 -O2 -Wall -Wconversion -Werror -Wextra -Wpedantic \
 	-Wwrite-strings -fstack-protector-all -g -D_FORTIFY_SOURCE=2
 
 # Options d'éditions des liens
@@ -29,8 +29,11 @@ all: $(targets)
 clean:
 	$(RM) $(objects) $(targets)
 
-$(targets): $(objects)
-	$(CC) $(objects) $(CXXFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ 
+cmdl: $(srcdir)/squeue.o cmdl.o
+	$(CC) $^ $(LDFLAGS) -o $@
+
+cmdld: $(srcdir)/squeue.o cmdld.o
+	$(CC) $^ $(LDFLAGS) -o $@
 
 # Dépendances des fichiers objets
 squeue.o: $(srcdir)/squeue.c $(incdir)/squeue.h $(incdir)/config.h
