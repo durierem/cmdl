@@ -19,7 +19,7 @@ CFLAGS = $(MCFLAGS) -std=c11 -O2 -Wall -Wconversion -Werror -Wextra -Wpedantic \
 LDFLAGS = -lrt -pthread
 
 # Liste des objets
-objects = $(srcdir)/squeue.o cmdld.o cmdl.o
+objects = $(srcdir)/squeue.o $(srcdir)/log.o cmdld.o cmdl.o
 
 # Cible par défaut
 targets = cmdl cmdld 
@@ -32,10 +32,11 @@ clean:
 cmdl: $(srcdir)/squeue.o cmdl.o
 	$(CC) $^ $(LDFLAGS) -o $@
 
-cmdld: $(srcdir)/squeue.o cmdld.o
+cmdld: $(srcdir)/squeue.o cmdld.o $(srcdir)/log.o
 	$(CC) $^ $(LDFLAGS) -o $@
 
 # Dépendances des fichiers objets
 squeue.o: $(srcdir)/squeue.c $(incdir)/squeue.h $(incdir)/config.h
-cmdld.o: cmdld.c $(incdir)/squeue.h $(incdir)/config.h
+log.o: $(srcdir)/log.c $(incdir)/config.h $(incdir)/log.h
+cmdld.o: cmdld.c $(incdir)/squeue.h $(incdir)/config.h $(incdir)/log.h
 cmdl.o: cmdl.c $(incdir)/squeue.h $(incdir)/config.h
