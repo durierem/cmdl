@@ -1,4 +1,5 @@
 #include <fcntl.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -6,38 +7,38 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "../inc/squeue.h"
-#include "../inc/config.h"
+#include "squeue.h"
+#include "config.h"
 
 struct squeue {
     size_t size;    /* Taille des éléments */
-    size_t length;  /* Longueur courante de la file */
-    size_t next;       /* Pointeur vers l'élément suivant de la file */
-    char data[];
+    char *start;    /* Début de la file */
+    char *end;      /* Fin de la file */
+    char data[];    /* Zone mémoire dédiée à la file */
 };
 
-SQueue q_empty(size_t size) {
+SQueue sq_empty(size_t size) {
     size_t shm_size = sizeof(struct squeue) + SQ_LENGTH_MAX * size;
 
-    int fd = shm_open(SHM_OBJ_NAME, O_RDWR | O_CREAT | O_EXCL,
+    int fd = shm_open(SHM_QUEUE, O_RDWR | O_CREAT | O_EXCL,
             S_IRUSR | S_IWUSR);
 
     if (fd == -1) {
         return NULL;
     }
 
-    /* Laisser le fichier pour que les clients puissent ouvrir la mémoire
+    /* /!\ À supprimer
+     * Il faut laisser le fichier pour que les clients puissent ouvrir la mémoire
      * partagée. Unlink à effectuer lors de la terminaison du démon seulement */
-
-    if (shm_unlink(SHM_OBJ_NAME) == -1) {
+    if (shm_unlink(SHM_QUEUE) == -1) {
         return NULL;
     }
 
-    if (ftruncate(fd, shm_size) == -1) {
+    if (ftruncate(fd, (off_t) shm_size) == -1) {
         return NULL;
     }
 
-    volatile struct squeue *shm_queue = mmap(NULL, shm_size,
+    struct squeue *shm_queue = mmap(NULL, shm_size,
             PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 
     if (shm_queue == MAP_FAILED) {
@@ -45,29 +46,23 @@ SQueue q_empty(size_t size) {
     }
 
     shm_queue->size = size;
-    shm_queue->length = 0;
-    shm_queue->next = shm_queue->data; /* (data + length * size) */
+    shm_queue->start = shm_queue->data;
+    shm_queue->end = shm_queue->data;
     return shm_queue;
 }
 
-const void *sq_enqueue(SQueue sq, const void *obj) {
-    if (sq == NULL || sq->size != sizeof(*((struct squeue *) obj))) {
-        return NULL;
+#define FUN_SUCCESS 0
+#define FUN_FAILURE 42
+
+int sq_enqueue(SQueue sq, const void *obj) {
+    if (sq == NULL || obj == NULL) {
+        return FUN_FAILURE;
     }
 
-    memcpy(sq->next, obj, sizeof(*(struct squeue *) obj));
-    const void *retval = sq->next;
-    sq->length++;
-    sq->next += sq->length * sq->size;
-    return retval;
+    /* DÉBUT SECTION CRITIQUE */
+    memcpy(sq->end, obj, sq->size);
+    sq->end += sq->size;
+    /* FIN SECTION CRITIQUE */
+
+    return FUN_SUCCESS; 
 }
-
-bool sq_isempty(const SQueue sq) {
-    return sq->length == 0;
-}
-
-bool sq_isfull(const SQueue sq) {
-    return sq->length == SQ_LENGTH_MAX;
-}
-
-
