@@ -1,12 +1,12 @@
 # Makefile
 # --------
 
+# Compilateur
+CC = gcc
+
 # Répertoires contenant les sources et les en-têtes
 srcdir = src
 incdir = inc
-
-# Compilateur
-CC = gcc
 
 # Options obligatoires pour la compilation correcte
 MCFLAGS = -D_XOPEN_SOURCE=500 -I$(incdir) -pthread
@@ -19,24 +19,26 @@ CFLAGS = $(MCFLAGS) -std=c11 -O2 -Wall -Wconversion -Werror -Wextra -Wpedantic \
 LDFLAGS = -lrt -pthread
 
 # Liste des objets
-objects = $(srcdir)/squeue.o $(srcdir)/log.o cmdld.o cmdl.o
+objects = cmdl.o cmdld.o $(srcdir)/log.o $(srcdir)/squeue.o 
 
-# Cible par défaut
-targets = cmdl cmdld 
+# Liste des exécutables finaux
+executables = cmdl cmdld 
 
-all: $(targets)
+# Cible par défaut (tous les exécutables)
+all: $(executables)
 
+# Nettoyage des fichiers créés
 clean:
-	$(RM) $(objects) $(targets)
+	$(RM) $(objects) $(executables)
 
-cmdl: $(srcdir)/squeue.o cmdl.o
+# Règles pour les deux exécutables
+cmdl: cmdl.o $(srcdir)/squeue.o
+	$(CC) $^ $(LDFLAGS) -o $@
+cmdld: cmdld.o $(srcdir)/log.o $(srcdir)/squeue.o
 	$(CC) $^ $(LDFLAGS) -o $@
 
-cmdld: $(srcdir)/squeue.o cmdld.o $(srcdir)/log.o
-	$(CC) $^ $(LDFLAGS) -o $@
-
-# Dépendances des fichiers objets
-squeue.o: $(srcdir)/squeue.c $(incdir)/squeue.h $(incdir)/config.h
+# Dépendances des fichiers objets (règles implicites)
+cmdl.o: cmdl.c $(incdir)/config.h $(incdir)/squeue.h
+cmdld.o: cmdld.c $(incdir)/config.h $(incdir)/log.h $(incdir)/squeue.h
 log.o: $(srcdir)/log.c $(incdir)/config.h $(incdir)/log.h
-cmdld.o: cmdld.c $(incdir)/squeue.h $(incdir)/config.h $(incdir)/log.h
-cmdl.o: cmdl.c $(incdir)/squeue.h $(incdir)/config.h
+squeue.o: $(srcdir)/squeue.c $(incdir)/config.h $(incdir)/squeue.h
