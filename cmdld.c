@@ -1,7 +1,6 @@
 /* TODO:
- * - Lier plus étroitement die() et elog()
- *   -> Déplacer die() vers le module de log ? Renommer le module ?
- *   -> Différencier les erreurs pre-daemon et le reste ?
+ *  - Rediriger STDERR vers /dev/null
+ *      -> forcer dlog() à utiliser le fichier de log
  */
 
 #include <errno.h>
@@ -21,19 +20,33 @@
 #include "log.h"
 #include "squeue.h"
 
+/* Les deux options possibles sur la ligne de commande */
 #define OPT_START "start"
 #define OPT_STOP "stop"
+#define opt_test(opt) strcmp(opt, argv[1]) == 0 
+
+/* Chemin vers le fichier de log du daemon */
+#define DAEMON_LOG_FILE strcat(getenv("HOME"), "/.cmdld.log")
+
+/* Nom associé au sémaphore qui assure l'unicité du daemon */
+#define DAEMON_RUN_MUTEX "/cmdld_run_mutex"
+
+/* Nom associé au SHM pour stocker le PID du daemon */
+#define DAEMON_SHM_PID "/cmdld_shm_pid"
 
 /**
- * Libère les ressources allouées pour les descripteurs de fichiers,
- * les sémaphores, etc.
+ * Libère diverses ressources allouées pour le programme.
+ *
+ * Les ressources libérées sont celles qui ne doivent l'être qu'à la
+ * terminaison du programme. Ceci inclut : descripteurs de fichiers,
+ * sémaphores et segments de mémoire partagée.
  */
 void cleanup(void);
 
 /**
  * Lance le processus de daemonisation.
  *
- * La daemonisation crée un processus fils détaché de tout terminal dont dont
+ * La daemonisation crée un processus fils détaché de tout terminal dont
  * l'entrée standard est redirigée vers /dev/null et les sorties standard et
  * d'erreur vers le fichier DAEMON_LOG_FILE.
  * À la fin du processus, le daemon ainsi créé contacte le processus parent
@@ -47,33 +60,47 @@ void daemonise(const char *pipename);
  * Termine le processus avec le code de retour EXIT_FAILURE.
  * 
  * La terminaison du programme est log dans DAEMON_LOG_FILE. Le log inclut
- * le message d'erreur fourni, ainsi que la valeur de errno et de strerror().
- * Avant de quitter, un appel à cleanup() est effectué.
+ * le message d'erreur fourni, ainsi que la valeur de errno et le message
+ * d'erreur associé. Avant de quitter, un appel à cleanup() est effectué.
  *
  * @param format Le message d'erreur à log, formatté comme pour printf().
  */
 void die(const char *format, ...);
 
 /**
- * Macro-fonction enveloppe pour la fonction die() : ajoute au message d'erreur
- * le nom du fichier et la ligne de l'erreur.
+ * Macro-fonction enveloppe pour la fonction die().
+ * 
+ * Ajoute au message d'erreur le nom du fichier et le numéro de la ligne à
+ * laquelle l'erreur à été lancée.
  */
 #define died(msg, ...) die("(%s:%d) " msg, __FILE__, __LINE__, #__VA_ARGS__)
 
 /**
- * Verouille le processus pour assurer son unicité en utilisant un mutex.
+ * Tente de verouiller le processus pour assurer son unicité.
  *
- * @return Zéro s'il n'existe pas une autre instance du programme, -1 sinon.
+ * Si le processus appellant est le premier à utiliser trylock(), la fonction
+ * réussie, verouille un mutex, et renvoie 0. Tant que le processus appellant
+ * n'a pas fait appel a unlock(), aucune autre instance du programme ne pourra
+ * être lancée dans un autre processus. Un appel à unlock() sans avoir utilisé
+ * trylock() au préalable échoue.
+ *
+ * @return 0 en cas de succès, -1 sinon.
  */
-int lock(void);
+int trylock(void);
+int unlock(void);
 
 /**
  * Démarre la boucle infinie principale du daemon.
  */
 void mainloop(void);
 
-int storepid(void);
-int retrievepid(void);
+/**
+ * Stocke/récupère le PID du processus dans DAEMON_SHM_PID.
+ * 
+ * @return Le PID stocké/récupéré en cas de succès, -1 sinon.
+ */
+pid_t storepid(void);
+pid_t retrievepid(void);
 
 /**
  * Affiche l'aide et quitte.
@@ -82,35 +109,38 @@ void usage(void);
 
 int main(int argc, char *argv[])
 {
-    /* Affiche l'aide si aucune option n'est spécifiée */
-    if (argc < 2)
+    /* Affiche l'aide si les options sont incorrectes */
+    if (argc < 2 || !(opt_test(OPT_START) || opt_test(OPT_STOP)))
         usage();
 
-    /* Gère la terminaison du daemon  déjà existant*/
-    if (strcmp(argv[1], OPT_STOP) == 0) {
-        if (lock() == 0) {
-            fprintf(stderr, "[ERROR] No instance is running!\n");
-            cleanup();
+    bool isrunning = (trylock() == -1);
+    if (opt_test(OPT_START) && isrunning) {
+        fprintf(stderr, "Aborting: another instance is already running!\n");
+        exit(EXIT_FAILURE);
+    } else if (opt_test(OPT_STOP)) {
+        if (!isrunning) {
+            fprintf(stderr, "Aborting: no instance is running!\n");
+            
+            /* 
+             * Puisqu'aucune autre instance n'est en cours, l'appel à trylock()
+             * a réussi. Il faut donc unlock() pour permettre au futures
+             * instances de pouvoir utiliser trylock() à nouveau.
+             */
+            unlock();
             exit(EXIT_FAILURE);
         }
-        
+
         pid_t pid = retrievepid();
-        if (pid == -1)
-            die("retrievepid");
+        if (pid == -1) {
+            fprintf(stderr, "Error: unable to retrieve the daemon's PID.\n");
+            exit(EXIT_FAILURE);
+        }
 
-        if (kill(pid, SIGTERM) == -1)
-            die("kill");
-
+        if (kill(pid, SIGTERM) == -1) {
+            fprintf(stderr, "Error: unable to send SIGTERM to the daemon.\n");
+            exit(EXIT_FAILURE);
+        }
         exit(EXIT_SUCCESS);
-    }
-
-    if (strcmp(argv[1], OPT_START) != 0)
-        usage();
-
-    /* Vérifie la présence d'une autre instance du programme */
-    if (lock() == -1) {
-        fprintf(stderr, "[ERROR] Another instance is already running!\n");
-        exit(EXIT_FAILURE);
     }
 
     /* Construit le nom d'un tube nommé à partir du PID du processus */
@@ -150,10 +180,11 @@ int main(int argc, char *argv[])
 
 void cleanup(void)
 {
-    sem_unlink(DAEMON_RUN_MUTEX);
+    unlock();
     shm_unlink(DAEMON_SHM_PID);
 
     for (int i = 0; i < sysconf(_SC_OPEN_MAX); i++) {
+        /* Stoppe sur le premier descripteur non valide */
         if (close(i) == -1 && errno == EBADF)
             break;
     }
@@ -181,7 +212,7 @@ void daemonise(const char *pipename)
     if (close(fd) == -1)
         die("close");
     
-    /* Redirige STDOUT et STDERR vers le fichier de logs */
+    /* Redirige STDOUT et STDERR vers le DAEMON_LOG_FILE */
     fd = open(DAEMON_LOG_FILE, O_WRONLY | O_CREAT | O_APPEND,
             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
     if (fd == -1)
@@ -211,30 +242,28 @@ void daemonise(const char *pipename)
 
 void die(const char *format, ...)
 {
-    /* 
-     * Si une erreur survient pendant le processus d'arrêt du programme et de
-     * log, on veut garder le code d'erreur initial.
-     */
+    /* Garde le code d'erreur initial si une autre erreur survient */
     int errcode = errno; 
 
     va_list args;
     va_start(args, format);
-    char msg[128]; // TODO: donner des constantes pour la taille des msg
+    char msg[LOG_MSG_MAX]; /* /!\ potentiel overflow  */
     vsnprintf(msg, sizeof(msg), format, args);
     va_end(args);
 
-    elog(ERROR, "Daemon died with message: %s", msg);
-    elog(ERROR, "\t=> errno (%d): %s", errcode, strerror(errcode));
+    dlog(L_ERROR, "Daemon died with message: %s", msg);
+    dlog(L_ERROR, "\t=> errno (%d): %s", errcode, strerror(errcode));
+
     cleanup();
     exit(EXIT_FAILURE);
 }
 
-int lock(void)
+int trylock(void)
 {
     /* 
-     * Note : l'appel à sem_unlink() est relégué à  fonction cleanup(). Cela
-     * permet de garder le sémaphore en mémoire pour permettre à d'autres
-     * processus de l'ouvrir.
+     * Note : l'appel à sem_unlink() est relégué à la fonction unlock().
+     * Cela permet de garder le sémaphore en mémoire pour permettre à
+     * d'autres processus de l'ouvrir.
      * Dans tous les cas, l'appel à sem_close() est effectué à la fin de la
      * fonction et permet de libérer les ressources allouées.
      */
@@ -243,21 +272,26 @@ int lock(void)
             S_IRUSR | S_IWUSR, 1);
 
     if (sem == SEM_FAILED)
-        die("sem_open");
-    
+        return -1; 
+
     int r = 0;
     if (sem_trywait(sem) == -1)
         r = -1;
 
     if (sem_close(sem) == -1)
-        die("sem_close");
+        return -1
 
     return r;
 }
 
+int unlock(void)
+{
+    return sem_unlink(DAEMON_RUN_MUTEX);
+}
+
 void TERMhandler()
 {
-    elog(INFO, "Daemon terminated");
+    dlog(L_INFO, "Daemon terminated");
     cleanup();
     exit(EXIT_SUCCESS);
 }
@@ -265,13 +299,13 @@ void TERMhandler()
 void mainloop(void)
 {
     signal(SIGTERM, TERMhandler);
-    elog(INFO, "Daemon started");
+    dlog(L_INFO, "Daemon started");
 
     /* Attente active -> pas bon pour l'usage CPU */
     while (1);
 }
 
-int storepid(void)
+pid_t storepid(void)
 {
     size_t shm_size = sizeof(pid_t);
 
@@ -289,12 +323,11 @@ int storepid(void)
 
     *shm_pid = getpid();
 
-    return 0;
+    return *shm_pid;
 }
 
 pid_t retrievepid(void)
 {
-
     size_t shm_size = sizeof(pid_t);
 
     int fd = shm_open(DAEMON_SHM_PID, O_RDONLY, S_IRUSR);

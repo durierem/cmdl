@@ -5,11 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Nom associé au SHM pour stocker la file */
 #define SHM_QUEUE "/cmdl_shm_queue"
-
-#define DAEMON_LOG_FILE strcat(getenv("HOME"), "/.cmdld.log")
-#define DAEMON_RUN_MUTEX "/cmdld_run_mutex"
-#define DAEMON_SHM_PID "/cmdld_shm_pid"
 
 #ifndef ARG_MAX
 #define ARG_MAX 4096
