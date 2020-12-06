@@ -1,8 +1,3 @@
-/* TODO:
- *  - Rediriger STDERR vers /dev/null
- *      -> forcer dlog() à utiliser le fichier de log
- */
-
 #include <errno.h>
 #include <fcntl.h>
 #include <semaphore.h>
@@ -17,7 +12,7 @@
 #include <unistd.h>
 
 #include "config.h"
-#include "log.h"
+#include "logger.h"
 #include "squeue.h"
 
 /* Les deux options possibles sur la ligne de commande */
@@ -26,7 +21,7 @@
 #define opt_test(opt) strcmp(opt, argv[1]) == 0 
 
 /* Chemin vers le fichier de log du daemon */
-#define DAEMON_LOG_FILE strcat(getenv("HOME"), "/.cmdld.log")
+#define LOG_FILE strcat(getenv("HOME"), "/.cmdld.log")
 
 /* Nom associé au sémaphore qui assure l'unicité du daemon */
 #define DAEMON_RUN_MUTEX "/cmdld_run_mutex"
@@ -143,6 +138,8 @@ int main(int argc, char *argv[])
         exit(EXIT_SUCCESS);
     }
 
+    log_setfile(LOG_FILE);
+
     /* Construit le nom d'un tube nommé à partir du PID du processus */
     pid_t pid = getpid();
     const char *pipeprefix = "/tmp/cmdld_pipe";
@@ -165,7 +162,12 @@ int main(int argc, char *argv[])
         break;
 
     default:
-        /* open() bloquant jusqu'au contact par le daemon */
+        /*
+         * open() bloquant jusqu'au contact par le daemon
+         *  -> possibilité de blocage infini
+         *  -> utiliser un timer en parallèle ?
+         */
+
         fdpipe = open(pipename, O_RDONLY);
         if (fdpipe == -1)
             die("open");
@@ -209,21 +211,13 @@ void daemonise(const char *pipename)
         die("open");
     if (dup2(fd, STDIN_FILENO) == -1)
         die("dup2");
-    if (close(fd) == -1)
-        die("close");
-    
-    /* Redirige STDOUT et STDERR vers le DAEMON_LOG_FILE */
-    fd = open(DAEMON_LOG_FILE, O_WRONLY | O_CREAT | O_APPEND,
-            S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-    if (fd == -1)
-        die("open");
     if (dup2(fd, STDOUT_FILENO) == -1)
         die("dup2");
     if (dup2(fd, STDERR_FILENO) == -1)
         die("dup2");
     if (close(fd) == -1)
         die("close");
-
+    
     /* Contacte le processus parent pour confirmer la daemonisation */
     fd = open(pipename, O_WRONLY);
     if (fd == -1)
@@ -251,8 +245,8 @@ void die(const char *format, ...)
     vsnprintf(msg, sizeof(msg), format, args);
     va_end(args);
 
-    dlog(L_ERROR, "Daemon died with message: %s", msg);
-    dlog(L_ERROR, "\t=> errno (%d): %s", errcode, strerror(errcode));
+    log_puts(L_ERROR, "Daemon died with message: %s", msg);
+    log_puts(L_ERROR, "\t=> errno (%d): %s", errcode, strerror(errcode));
 
     cleanup();
     exit(EXIT_FAILURE);
@@ -279,7 +273,7 @@ int trylock(void)
         r = -1;
 
     if (sem_close(sem) == -1)
-        return -1
+        return -1;
 
     return r;
 }
@@ -291,7 +285,7 @@ int unlock(void)
 
 void TERMhandler()
 {
-    dlog(L_INFO, "Daemon terminated");
+    log_puts(L_INFO, "Daemon terminated");
     cleanup();
     exit(EXIT_SUCCESS);
 }
@@ -299,7 +293,7 @@ void TERMhandler()
 void mainloop(void)
 {
     signal(SIGTERM, TERMhandler);
-    dlog(L_INFO, "Daemon started");
+    log_puts(L_INFO, "Daemon started");
 
     /* Attente active -> pas bon pour l'usage CPU */
     while (1);

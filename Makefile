@@ -19,7 +19,7 @@ CFLAGS = $(MCFLAGS) -std=c11 -O2 -Wall -Wconversion -Werror -Wextra -Wpedantic \
 LDFLAGS = -lrt -pthread
 
 # Liste des objets
-objects = cmdl.o cmdld.o $(srcdir)/log.o $(srcdir)/squeue.o 
+objects = cmdl.o cmdld.o $(srcdir)/logger.o $(srcdir)/squeue.o 
 
 # Liste des exécutables finaux
 executables = cmdl cmdld 
@@ -34,11 +34,11 @@ clean:
 # Règles pour les deux exécutables
 cmdl: cmdl.o $(srcdir)/squeue.o
 	$(CC) $^ $(LDFLAGS) -o $@
-cmdld: cmdld.o $(srcdir)/log.o $(srcdir)/squeue.o
+cmdld: cmdld.o $(srcdir)/logger.o $(srcdir)/squeue.o
 	$(CC) $^ $(LDFLAGS) -o $@
 
 # Dépendances des fichiers objets (règles implicites)
 cmdl.o: cmdl.c $(incdir)/config.h $(incdir)/squeue.h
-cmdld.o: cmdld.c $(incdir)/config.h $(incdir)/log.h $(incdir)/squeue.h
-log.o: $(srcdir)/log.c $(incdir)/config.h $(incdir)/log.h
+cmdld.o: cmdld.c $(incdir)/config.h $(incdir)/logger.h $(incdir)/squeue.h
+logger.o: $(srcdir)/logger.c $(incdir)/config.h $(incdir)/logger.h
 squeue.o: $(srcdir)/squeue.c $(incdir)/config.h $(incdir)/squeue.h
