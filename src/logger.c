@@ -3,7 +3,6 @@
 #include <string.h>
 #include <time.h>
 
-#include "config.h"
 #include "logger.h"
 
 #define DEFAULT_FILE "/tmp/default_log"
@@ -12,7 +11,6 @@
 #define ERROR_PREFIX  "[ERROR] "
 #define TIME_FORMAT   "[%F %T] "
 
-#define LVPREFIX_SIZE 6
 #define TIME_PREFIX_SIZE 22 
 
 static const char *logfile = DEFAULT_FILE;

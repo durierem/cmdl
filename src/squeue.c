@@ -1,4 +1,5 @@
 #include <fcntl.h>
+#include <semaphore.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,29 +9,21 @@
 #include <unistd.h>
 
 #include "squeue.h"
-#include "config.h"
+#include "common.h"
 
-struct squeue {
-    size_t size;    /* Taille des éléments */
-    char *start;    /* Début de la file */
-    char *end;      /* Fin de la file */
-    char data[];    /* Zone mémoire dédiée à la file */
+/* file vide si tête de lecture et écirture au même endroit */
+struct _squeue {
+    int head;
+    int tail;
+    struct Request data[SQ_LENGTH_MAX];
+    sem_t *slots_left;
 };
 
-SQueue sq_empty(size_t size) {
-    size_t shm_size = sizeof(struct squeue) + SQ_LENGTH_MAX * size;
+SQueue sq_empty(void) {
+    size_t shm_size = sizeof(struct _squeue); 
 
-    int fd = shm_open(SHM_QUEUE, O_RDWR | O_CREAT | O_EXCL,
-            S_IRUSR | S_IWUSR);
-
+    int fd = shm_open(SHM_QUEUE, O_RDWR | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
     if (fd == -1) {
-        return NULL;
-    }
-
-    /* /!\ À supprimer
-     * Il faut laisser le fichier pour que les clients puissent ouvrir la mémoire
-     * partagée. Unlink à effectuer lors de la terminaison du démon seulement */
-    if (shm_unlink(SHM_QUEUE) == -1) {
         return NULL;
     }
 
@@ -38,31 +31,41 @@ SQueue sq_empty(size_t size) {
         return NULL;
     }
 
-    struct squeue *shm_queue = mmap(NULL, shm_size,
-            PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-
-    if (shm_queue == MAP_FAILED) {
+    struct _squeue *sq = mmap(NULL, shm_size, PROT_READ | PROT_WRITE,
+            MAP_SHARED, fd, 0);
+    if (sq == MAP_FAILED) {
         return NULL;
     }
 
-    shm_queue->size = size;
-    shm_queue->start = shm_queue->data;
-    shm_queue->end = shm_queue->data;
-    return shm_queue;
+    sq->head = 0;
+    sq->tail = 0;
+
+    if (sem_init(sq->slots_left, 1, SQ_LENGTH_MAX) == -1) {
+        return NULL;
+    }
+
+    return sq;
 }
 
 #define FUN_SUCCESS 0
 #define FUN_FAILURE 42
 
-int sq_enqueue(SQueue sq, const void *obj) {
-    if (sq == NULL || obj == NULL) {
+int sq_enqueue(SQueue sq, struct Request *rq) {
+    if (sq == NULL || rq == NULL) {
         return FUN_FAILURE;
     }
 
-    /* DÉBUT SECTION CRITIQUE */
-    memcpy(sq->end, obj, sq->size);
-    sq->end += sq->size;
-    /* FIN SECTION CRITIQUE */
+    if (sem_wait(sq->slots_left) == -1) {
+        return FUN_FAILURE;
+    }
+
+    sq->data[sq->tail] = *rq;
+    sq->tail = (sq->tail + 1) % SQ_LENGTH_MAX;
 
     return FUN_SUCCESS; 
+}
+
+void sq_dispose(SQueue *sqptr) {
+    sem_destroy((*sqptr)->slots_left);
+    shm_unlink(SHM_QUEUE);
 }

@@ -11,9 +11,14 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "config.h"
-#include "logger.h"
+#include "common.h"
 #include "squeue.h"
+
+#ifdef USE_SYSLOG
+#include <syslog.h>
+#else
+#include "logger.h"
+#endif
 
 /* Les deux options possibles sur la ligne de commande */
 #define OPT_START "start"
@@ -42,8 +47,8 @@ void cleanup(void);
  * Lance le processus de daemonisation.
  *
  * La daemonisation crée un processus fils détaché de tout terminal dont
- * l'entrée standard est redirigée vers /dev/null et les sorties standard et
- * d'erreur vers le fichier DAEMON_LOG_FILE.
+ * l'entrée standard et les sorties standard et d'erreur sont redirigées vers
+ * /dev/null.
  * À la fin du processus, le daemon ainsi créé contacte le processus parent
  * avec pipename.
  *
@@ -54,7 +59,7 @@ void daemonise(const char *pipename);
 /**
  * Termine le processus avec le code de retour EXIT_FAILURE.
  * 
- * La terminaison du programme est log dans DAEMON_LOG_FILE. Le log inclut
+ * La terminaison du programme est log dans LOG_FILE. Le log inclut
  * le message d'erreur fourni, ainsi que la valeur de errno et le message
  * d'erreur associé. Avant de quitter, un appel à cleanup() est effectué.
  *
@@ -138,12 +143,16 @@ int main(int argc, char *argv[])
         exit(EXIT_SUCCESS);
     }
 
+#ifdef USE_SYSLOG
+    openlog(NULL, LOG_PID, LOG_DAEMON);
+#else
     log_setfile(LOG_FILE);
+#endif
 
     /* Construit le nom d'un tube nommé à partir du PID du processus */
     pid_t pid = getpid();
     const char *pipeprefix = "/tmp/cmdld_pipe";
-    char pipename[strlen(pipeprefix) + 8];
+    char pipename[strlen(pipeprefix) + 16];
     sprintf(pipename, "%s%d", pipeprefix, pid);
 
     /* Créé le tube de communication avec le daemon */
@@ -241,12 +250,17 @@ void die(const char *format, ...)
 
     va_list args;
     va_start(args, format);
-    char msg[LOG_MSG_MAX]; /* /!\ potentiel overflow  */
+    char msg[256]; /* /!\ potentiel overflow  */
     vsnprintf(msg, sizeof(msg), format, args);
     va_end(args);
 
-    log_puts(L_ERROR, "Daemon died with message: %s", msg);
-    log_puts(L_ERROR, "\t=> errno (%d): %s", errcode, strerror(errcode));
+#ifdef USE_SYSLOG
+    syslog(LOG_ERR, "Daemon died: '%s', errno=%d '%s'",
+            msg, errcode, strerror(errcode));
+#else
+    log_puts(L_ERROR, "Daemon died: '%s', errno=%d '%s'",
+            msg, errcode, strerror(errcode));
+#endif
 
     cleanup();
     exit(EXIT_FAILURE);
@@ -285,7 +299,11 @@ int unlock(void)
 
 void TERMhandler()
 {
+#ifdef USE_SYSLOG
+    syslog(LOG_INFO, "Daemon terminated");
+#else
     log_puts(L_INFO, "Daemon terminated");
+#endif
     cleanup();
     exit(EXIT_SUCCESS);
 }
@@ -293,7 +311,12 @@ void TERMhandler()
 void mainloop(void)
 {
     signal(SIGTERM, TERMhandler);
+    
+#ifdef USE_SYSLOG
+    syslog(LOG_INFO, "Daemon started");
+#else
     log_puts(L_INFO, "Daemon started");
+#endif
 
     /* Attente active -> pas bon pour l'usage CPU */
     while (1);
