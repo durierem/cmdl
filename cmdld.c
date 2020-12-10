@@ -9,16 +9,11 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <syslog.h>
 #include <unistd.h>
 
 #include "common.h"
 #include "squeue.h"
-
-#ifdef USE_SYSLOG
-#include <syslog.h>
-#else
-#include "logger.h"
-#endif
 
 /* Les deux options possibles sur la ligne de commande */
 #define OPT_START "start"
@@ -95,6 +90,11 @@ int unlock(void);
 void mainloop(void);
 
 /**
+ * Gestionnaire de signaux du daemon.
+ */
+void sighandler(int sig);
+
+/**
  * Stocke/récupère le PID du processus dans DAEMON_SHM_PID.
  * 
  * @return Le PID stocké/récupéré en cas de succès, -1 sinon.
@@ -107,28 +107,27 @@ pid_t retrievepid(void);
  */
 void usage(void);
 
-int main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]) {
     /* Affiche l'aide si les options sont incorrectes */
-    if (argc < 2 || !(opt_test(OPT_START) || opt_test(OPT_STOP)))
+    if (argc < 2 || !(opt_test(OPT_START) || opt_test(OPT_STOP))) {
         usage();
+    }
 
+    /* Gestion des options start/stop */
     bool isrunning = (trylock() == -1);
     if (opt_test(OPT_START) && isrunning) {
-        fprintf(stderr, "Aborting: another instance is already running!\n");
+        fprintf(stderr, "Error: another instance is already running.\n");
         exit(EXIT_FAILURE);
     } else if (opt_test(OPT_STOP)) {
         if (!isrunning) {
-            fprintf(stderr, "Aborting: no instance is running!\n");
+            fprintf(stderr, "Error: no instance is running.\n");
             
-            /* 
-             * Puisqu'aucune autre instance n'est en cours, l'appel à trylock()
+            /* Puisqu'aucune autre instance n'est en cours, l'appel à trylock()
              * a réussi. Il faut donc unlock() pour permettre au futures
-             * instances de pouvoir utiliser trylock() à nouveau.
-             */
+             * instances de pouvoir utiliser trylock() à nouveau. */
             unlock();
             exit(EXIT_FAILURE);
-        }
+        }   
 
         pid_t pid = retrievepid();
         if (pid == -1) {
@@ -140,14 +139,12 @@ int main(int argc, char *argv[])
             fprintf(stderr, "Error: unable to send SIGTERM to the daemon.\n");
             exit(EXIT_FAILURE);
         }
+
         exit(EXIT_SUCCESS);
     }
 
-#ifdef USE_SYSLOG
-    openlog(NULL, LOG_PID, LOG_DAEMON);
-#else
-    log_setfile(LOG_FILE);
-#endif
+    /* Ouvre la connexion au système de log */
+    openlog("cmdld", LOG_PID, LOG_DAEMON);
 
     /* Construit le nom d'un tube nommé à partir du PID du processus */
     pid_t pid = getpid();
@@ -156,8 +153,9 @@ int main(int argc, char *argv[])
     sprintf(pipename, "%s%d", pipeprefix, pid);
 
     /* Créé le tube de communication avec le daemon */
-    if (mkfifo(pipename, S_IRUSR | S_IWUSR) == -1)
+    if (mkfifo(pipename, S_IRUSR | S_IWUSR) == -1) {
         die("mkfifo");
+    }
 
     /* "fork off and die" */
     int fdpipe;
@@ -168,41 +166,42 @@ int main(int argc, char *argv[])
 
     case 0:
         daemonise(pipename);
-        break;
-
+        mainloop();
+        exit(EXIT_SUCCESS);
+        
     default:
-        /*
-         * open() bloquant jusqu'au contact par le daemon
+        /* open() bloquant jusqu'au contact par le daemon
          *  -> possibilité de blocage infini
-         *  -> utiliser un timer en parallèle ?
-         */
-
+         *  -> utiliser un timer en parallèle ? */
         fdpipe = open(pipename, O_RDONLY);
-        if (fdpipe == -1)
+        if (fdpipe == -1) {
             die("open");
-        if (unlink(pipename) == -1)
+        }
+
+        if (unlink(pipename) == -1) {
             die("unlink");
-        if (close(fdpipe) == -1)
+        }
+
+        if (close(fdpipe) == -1) {
             die("close");
+        }
     }
 
     return EXIT_SUCCESS;
 }
 
-void cleanup(void)
-{
+void cleanup(void) {
     unlock();
     shm_unlink(DAEMON_SHM_PID);
-
     for (int i = 0; i < sysconf(_SC_OPEN_MAX); i++) {
         /* Stoppe sur le premier descripteur non valide */
-        if (close(i) == -1 && errno == EBADF)
+        if (close(i) == -1 && errno == EBADF) {
             break;
+        }
     }
 }
 
-void daemonise(const char *pipename)
-{
+void daemonise(const char *pipename) {
     /* Détache le daemon de la session actuelle */
     if (setsid() == -1)
         die("setsid");
@@ -234,17 +233,23 @@ void daemonise(const char *pipename)
     if (close(fd) == -1)
         die("close");
 
+    /* Stocke le PID pour être contacté plus tard par un SITERM */
     if (storepid() == -1)
         die("storepid");
 
-    /* Exécute la boucle principale infinie */
-    mainloop();
-
-    exit(EXIT_SUCCESS);
+    /* Gestion des signaux : bloque tout sauf SIGTERM */
+    struct sigaction act;
+    act.sa_handler = sighandler;
+    act.sa_flags = 0;
+    if (sigfillset(&act.sa_mask) == -1)
+        die("sigfillset");
+    if (sigprocmask(SIG_SETMASK, &act.sa_mask, NULL) == -1)
+        die("sigprocmask");
+    if (sigaction(SIGTERM, &act, NULL) == -1)
+        die("sigaction");
 }
 
-void die(const char *format, ...)
-{
+void die(const char *format, ...) {
     /* Garde le code d'erreur initial si une autre erreur survient */
     int errcode = errno; 
 
@@ -254,108 +259,92 @@ void die(const char *format, ...)
     vsnprintf(msg, sizeof(msg), format, args);
     va_end(args);
 
-#ifdef USE_SYSLOG
     syslog(LOG_ERR, "Daemon died: '%s', errno=%d '%s'",
             msg, errcode, strerror(errcode));
-#else
-    log_puts(L_ERROR, "Daemon died: '%s', errno=%d '%s'",
-            msg, errcode, strerror(errcode));
-#endif
 
     cleanup();
     exit(EXIT_FAILURE);
 }
 
-int trylock(void)
-{
-    /* 
-     * Note : l'appel à sem_unlink() est relégué à la fonction unlock().
-     * Cela permet de garder le sémaphore en mémoire pour permettre à
-     * d'autres processus de l'ouvrir.
-     * Dans tous les cas, l'appel à sem_close() est effectué à la fin de la
-     * fonction et permet de libérer les ressources allouées.
-     */
-
+/* Note : l'appel à sem_unlink() est relégué à la fonction unlock().
+ * Cela permet de garder le sémaphore en mémoire pour permettre à
+ * d'autres processus de l'ouvrir.
+ * Dans tous les cas, l'appel à sem_close() est effectué à la fin de la
+ * fonction et permet de libérer les ressources allouées. */
+int trylock(void) {
     sem_t *sem = sem_open(DAEMON_RUN_MUTEX, O_RDWR | O_CREAT,
             S_IRUSR | S_IWUSR, 1);
 
-    if (sem == SEM_FAILED)
-        return -1; 
+    if (sem == SEM_FAILED) {
+        return -1;
+    }
 
     int r = 0;
-    if (sem_trywait(sem) == -1)
+    if (sem_trywait(sem) == -1) {
         r = -1;
+    }
 
-    if (sem_close(sem) == -1)
+    if (sem_close(sem) == -1) {
         return -1;
+    }
 
     return r;
 }
 
-int unlock(void)
-{
+int unlock(void) {
     return sem_unlink(DAEMON_RUN_MUTEX);
 }
 
-void TERMhandler()
-{
-#ifdef USE_SYSLOG
-    syslog(LOG_INFO, "Daemon terminated");
-#else
-    log_puts(L_INFO, "Daemon terminated");
-#endif
-    cleanup();
-    exit(EXIT_SUCCESS);
-}
-
-void mainloop(void)
-{
-    signal(SIGTERM, TERMhandler);
-    
-#ifdef USE_SYSLOG
+void mainloop(void) {
     syslog(LOG_INFO, "Daemon started");
-#else
-    log_puts(L_INFO, "Daemon started");
-#endif
 
     /* Attente active -> pas bon pour l'usage CPU */
     while (1);
 }
 
-pid_t storepid(void)
-{
+void sighandler(int sig) {
+    if (sig == SIGTERM) {
+        syslog(LOG_INFO, "Daemon terminated");
+        cleanup();
+        exit(EXIT_SUCCESS);
+    }
+}
+
+pid_t storepid(void) {
     size_t shm_size = sizeof(pid_t);
 
     int fd = shm_open(DAEMON_SHM_PID, O_RDWR | O_CREAT | O_EXCL,
             S_IRUSR | S_IWUSR);
-    if (fd == -1)
+    if (fd == -1) {
         return -1;
+    }
 
-    if (ftruncate(fd, (off_t) shm_size) == -1)
+    if (ftruncate(fd, (off_t) shm_size) == -1) {
         return -1;
+    }
 
     pid_t *shm_pid = mmap(NULL, shm_size, PROT_WRITE, MAP_SHARED, fd, 0);
-    if (shm_pid == MAP_FAILED)
+    if (shm_pid == MAP_FAILED) {
         return -1;
+    }
 
     *shm_pid = getpid();
 
     return *shm_pid;
 }
 
-pid_t retrievepid(void)
-{
+pid_t retrievepid(void) {
     size_t shm_size = sizeof(pid_t);
 
     int fd = shm_open(DAEMON_SHM_PID, O_RDONLY, S_IRUSR);
-    if (fd == -1)
+    if (fd == -1) {
         return -1;
+    }
 
     return *((pid_t *) mmap(NULL, shm_size, PROT_READ, MAP_SHARED, fd, 0));
 }
 
-void usage(void)
-{
+void usage(void) {
     printf("Usage: cmdld <start | stop>\n");
     exit(EXIT_FAILURE);
 }
