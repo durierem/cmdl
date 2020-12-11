@@ -7,10 +7,13 @@
 
 #define SQ_LENGTH_MAX 16
 
-typedef struct _squeue * SQueue;
+typedef struct __squeue * SQueue;
 
 extern SQueue sq_empty(void);
-extern int sq_enqueue(SQueue sq, struct Request *rq);
-extern void sq_dispose(SQueue *sqptr);
+extern int sq_enqueue(SQueue sq, const struct request *rq);
+extern int sq_dequeue(SQueue sq, struct request *rq);
+extern size_t sq_length(const SQueue sq);
+extern void sq_display(const SQueue sq);
+extern void sq_dispose(SQueue *sqp);
 
 #endif

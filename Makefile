@@ -7,39 +7,47 @@ CC = gcc
 # Répertoires contenant les sources et les en-têtes
 srcdir = src
 incdir = inc
+testdir = test
 
 # Options obligatoires pour la compilation correcte
 MCFLAGS = -D_XOPEN_SOURCE=500 -I$(incdir) -pthread
 
 # Toutes les options de compilation
-CFLAGS = $(MCFLAGS) -std=c11 -O2 -Wall -Wconversion -Werror -Wextra -Wpedantic \
-	-Wwrite-strings -fstack-protector-all -g -D_FORTIFY_SOURCE=2 -DUSE_SYSLOG
+CFLAGS = $(MCFLAGS) -std=c11 -O2 -Wall -Wconversion -Werror -Wextra \
+	-Wpedantic -Wwrite-strings -fstack-protector-all -g -fpie \
+	-D_FORTIFY_SOURCE=2 -DUSE_SYSLOG
 
 # Options d'éditions des liens
-LDFLAGS = -lrt -pthread
+LDFLAGS = -lrt -pthread -Wl,-z,relro,-z,now -pie
 
 # Liste des objets
-objects = cmdl.o cmdld.o $(srcdir)/logger.o $(srcdir)/squeue.o 
+objects = cmdl.o cmdld.o $(srcdir)/logger.o $(srcdir)/squeue.o $(testdir)/test_squeue.o
 
 # Liste des exécutables finaux
-executables = cmdl cmdld 
+executables = cmdl cmdld
+tests = $(testdir)/test_squeue
 
-# Cible par défaut (tous les exécutables)
+# Cible par défaut
 all: $(executables)
-	@echo "hello"
 
-# Nettoyage des fichiers créés
-clean:
-	$(RM) $(objects) $(executables)
+# Programme(s) de test
+test: $(tests)
 
-# Règles pour les deux exécutables
 cmdl: cmdl.o $(srcdir)/squeue.o
 	$(CC) $^ $(LDFLAGS) -o $@
 cmdld: cmdld.o $(srcdir)/logger.o $(srcdir)/squeue.o
 	$(CC) $^ $(LDFLAGS) -o $@
+$(testdir)/test_squeue: $(testdir)/test_squeue.o $(srcdir)/squeue.o
+	$(CC) $^ $(LDFLAGS) -o $@
 
+# Nettoyage des fichiers créés par la compilation
+clean:
+	$(RM) $(objects) $(executables) $(tests)
+
+# Nettoyage des fichiers créés
 # Dépendances des fichiers objets (règles implicites)
 cmdl.o: cmdl.c $(incdir)/common.h $(incdir)/squeue.h
 cmdld.o: cmdld.c $(incdir)/common.h $(incdir)/logger.h $(incdir)/squeue.h
 logger.o: $(srcdir)/logger.c $(incdir)/common.h $(incdir)/logger.h
 squeue.o: $(srcdir)/squeue.c $(incdir)/common.h $(incdir)/squeue.h
+test_squeue.o: $(srcdir)/squeue.c $(incdir)/squeue.h

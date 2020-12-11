@@ -19,7 +19,7 @@
 #define THREAD_MAX  16
 #define CLIENT_MAX  32
 
-struct Request {
+struct request {
     char cmd[ARG_MAX];
     char pipe[PATH_MAX];
 };
