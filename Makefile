@@ -4,7 +4,7 @@
 # Compilateur
 CC = gcc
 
-# Répertoires contenant les sources et les en-têtes
+# Répertoires 
 srcdir = src
 incdir = inc
 testdir = test
@@ -44,7 +44,6 @@ $(testdir)/test_squeue: $(testdir)/test_squeue.o $(srcdir)/squeue.o
 clean:
 	$(RM) $(objects) $(executables) $(tests)
 
-# Nettoyage des fichiers créés
 # Dépendances des fichiers objets (règles implicites)
 cmdl.o: cmdl.c $(incdir)/common.h $(incdir)/squeue.h
 cmdld.o: cmdld.c $(incdir)/common.h $(incdir)/logger.h $(incdir)/squeue.h

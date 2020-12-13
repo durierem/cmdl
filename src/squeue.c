@@ -16,11 +16,12 @@
 struct __squeue {
     int head;
     int tail;
+    size_t size;
     size_t length;
     sem_t mshm;
     sem_t mnfull;
     sem_t mnempty;
-    struct request data[SQ_LENGTH_MAX];
+    char data[];
 };
 
 static void __sq_cleanup(struct __squeue *sq) {
@@ -39,12 +40,13 @@ static void __sq_cleanup(struct __squeue *sq) {
     shm_unlink(SHM_QUEUE);
 }
 
-SQueue sq_empty(void) {
-    size_t shm_size = sizeof(struct __squeue); 
+SQueue sq_empty(size_t size) {
+    size_t shm_size = sizeof(struct __squeue) + SQ_LENGTH_MAX * size;
 
     int fd = shm_open(SHM_QUEUE, O_RDWR | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
     if (fd == -1) {
         return NULL;
+
     }
 
     if (ftruncate(fd, (off_t) shm_size) == -1) {
@@ -57,9 +59,12 @@ SQueue sq_empty(void) {
         return NULL;
     }
 
+    close(fd);
+
     sq->head = 0;
     sq->tail = 0;
     sq->length = 0;
+    sq->size = size;
 
     if (sem_init(&sq->mshm, 1, 1) == -1) {
         __sq_cleanup(sq);
@@ -76,15 +81,14 @@ SQueue sq_empty(void) {
         return NULL;
     }
 
-    assert(sq != NULL);
     return sq;
 }
 
 #define FUN_SUCCESS 0
 #define FUN_FAILURE -1
 
-int sq_enqueue(SQueue sq, const struct request *rq) {
-    if (sq == NULL || rq == NULL) {
+int sq_enqueue(SQueue sq, const void *obj) {
+    if (sq == NULL || obj == NULL) {
         return FUN_FAILURE;
     }
 
@@ -96,7 +100,7 @@ int sq_enqueue(SQueue sq, const struct request *rq) {
         return FUN_FAILURE;
     }
 
-    sq->data[sq->tail] = *rq;
+    memcpy(sq->data + (size_t) sq->tail * sq->size, obj, sq->size);
     sq->tail = (sq->tail + 1) % SQ_LENGTH_MAX;
     sq->length++;
     
@@ -111,8 +115,8 @@ int sq_enqueue(SQueue sq, const struct request *rq) {
     return FUN_SUCCESS; 
 }
 
-int sq_dequeue(SQueue sq, struct request *rq) {
-    if (sq == NULL || rq == NULL) {
+int sq_dequeue(SQueue sq, void *buf) {
+    if (sq == NULL || buf == NULL) {
         return FUN_FAILURE;
     }
 
@@ -124,7 +128,7 @@ int sq_dequeue(SQueue sq, struct request *rq) {
         return FUN_FAILURE;
     }
 
-    *rq = sq->data[sq->head];
+    memcpy(buf, sq->data + (size_t) sq->head * sq->size, sq->size);
     sq->head = (sq->head + 1) % SQ_LENGTH_MAX;
     sq->length--;
 
@@ -143,18 +147,26 @@ size_t sq_length(const SQueue sq) {
     return sq->length;
 }
 
-void sq_display(const SQueue sq) {
-    printf("head: %d, tail: %d, length: %zu\n", sq->head, sq->tail,
-            sq->length);
-    size_t i = 0;
-    while (i < sq->length) {
-        printf("data[%zu]: { cmd: '%s', pipe: '%s' }\n", i,
-                (sq->data[i]).cmd, (sq->data)[i].pipe);
-        i++;
+int sq_apply(SQueue sq, int (*fun)(void *)) {
+    if (sq == NULL) {
+        return FUN_FAILURE;
     }
+
+    int i = sq->head;
+    char *e = sq->data + (size_t) sq->head * sq->size;
+    do {
+        int ret = fun(e);
+        if (ret != 0) {
+            return ret;
+        }
+        i = (i + 1) % SQ_LENGTH_MAX;
+        e = sq->data + (size_t) i * sq->size;
+    } while (i != sq->tail);
+
+    return FUN_SUCCESS;
 }
 
 void sq_dispose(SQueue *sqp) {
-    __sq_cleanup(*sqp);
+    __sq_cleanup(*((struct __squeue **) sqp));
     *sqp = NULL;
 }
