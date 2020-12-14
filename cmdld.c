@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <semaphore.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -28,6 +29,8 @@
 
 /* Nom associé au SHM pour stocker le PID du daemon */
 #define DAEMON_SHM_PID "/cmdld_shm_pid"
+
+#define DAEMON_THREAD_MAX 4
 
 /**
  * Libère diverses ressources allouées pour le programme.
@@ -295,11 +298,47 @@ int unlock(void) {
     return sem_unlink(DAEMON_RUN_MUTEX);
 }
 
+struct execmd_routine_args {
+    struct request rq;
+    bool *status;
+}
+
+void execmd_routine(struct request rq) {
+    // fork/exec -> cmd > pipe
+}
+
+
 void mainloop(void) {
+    SQueue squeue = sq_empty(sizeof(struct request));
+    if (squeue == NULL) {
+        die("sq_empty");
+    }
+
+    pthread_t pool[DAEMON_THREAD_MAX];
+    bool poolav[DAEMON_THREAD_MAX] = { true };
+
     syslog(LOG_INFO, "Daemon started");
 
-    /* Attente active -> pas bon pour l'usage CPU */
-    while (1);
+    struct request rq;
+    while (sq_dequeue(squeue, &rq) == 0) {
+        for (int i = 0; i < DAEMON_THREAD_MAX; i++) {
+            if (poolav[i]) {
+                struct execmd_routine_args { rq, &poolav[i] };
+                int ret = pthread_create(threads[i], NULL,
+                        (void (*)(void *)) execmd_routine, &args);
+                if (ret != 0) {
+                    die("pthread_create");
+                }
+                goto next_request;
+            }
+        }
+
+        if (kill(rq->pid, SIGUSR1) == -1) {
+            die("kill");
+        }
+next_request:
+        /* EMPTY */
+    }
 }
 
 void sighandler(int sig) {
