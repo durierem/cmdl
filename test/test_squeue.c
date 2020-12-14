@@ -9,6 +9,8 @@
 
 #include "squeue.h"
 
+#define SHM_QUEUE "/testshmqueue"
+
 struct dummy {
     int a;
     const char *str;
@@ -32,21 +34,21 @@ void sighandler(int sig) {
 
 void test_sq_empty(void) {
     printf("Testing sq_empty...\n");
-    SQueue q = sq_empty(sizeof(struct dummy));
+    SQueue q = sq_empty(SHM_QUEUE, sizeof(struct dummy));
     assert(q != NULL);
     sq_dispose(&q);
 }
 
 void test_sq_dispose(void) {
     printf("Testing sq_dispose...\n");
-    SQueue q = sq_empty(sizeof(struct dummy));
+    SQueue q = sq_empty(SHM_QUEUE, sizeof(struct dummy));
     sq_dispose(&q);
     assert(q == NULL);
 }
 
 void test_sq_enqueue(void) {
     printf("Testing sq_enqueue...\n");
-    SQueue q = sq_empty(sizeof(struct dummy));
+    SQueue q = sq_empty(SHM_QUEUE, sizeof(struct dummy));
     struct dummy d = { 10, "foo" };
     assert(sq_enqueue(q, &d) == 0);
     assert(sq_length(q) == 1);
@@ -55,7 +57,7 @@ void test_sq_enqueue(void) {
 
 void test_sq_dequeue(void) {
     printf("Testing sq_dequeue...\n");
-    SQueue q = sq_empty(sizeof(struct dummy));
+    SQueue q = sq_empty(SHM_QUEUE, sizeof(struct dummy));
     struct dummy d = { 10, "foo" };
     sq_enqueue(q, &d);
     struct dummy r;
@@ -92,7 +94,7 @@ int main(void) {
     test_sq_dequeue();
 
 
-    SQueue q = sq_empty(sizeof(struct dummy));
+    SQueue q = sq_empty(SHM_QUEUE, sizeof(struct dummy));
 
     switch (fork()) {
     case -1:

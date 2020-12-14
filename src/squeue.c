@@ -14,14 +14,15 @@
 #include "common.h"
 
 struct __squeue {
-    int head;
-    int tail;
-    size_t size;
-    size_t length;
-    sem_t mshm;
-    sem_t mnfull;
-    sem_t mnempty;
-    char data[];
+    const char *shm_name;   /* Nom de la SHM associée à la file */
+    int head;               /* Indice de tête de file */
+    int tail;               /* Indice de queue de file */
+    size_t size;            /* Taille des éléments de la file */
+    size_t length;          /* Longueur courante de la file */
+    sem_t mshm;             /* Mutex pour l'accès à la SHM */
+    sem_t mnfull;           /* Mutex bloquant lorsque la file est pleine */
+    sem_t mnempty;          /* Mutex bloquant lorsque la file est vide */
+    char data[];            /* Données (éléments) de la file */
 };
 
 static void __sq_cleanup(struct __squeue *sq) {
@@ -37,16 +38,15 @@ static void __sq_cleanup(struct __squeue *sq) {
         sem_destroy(&sq->mnempty);
     }
 
-    shm_unlink(SHM_QUEUE);
+    shm_unlink(sq->shm_name);
 }
 
-SQueue sq_empty(size_t size) {
+SQueue sq_empty(const char *shm_name, size_t size) {
     size_t shm_size = sizeof(struct __squeue) + SQ_LENGTH_MAX * size;
 
-    int fd = shm_open(SHM_QUEUE, O_RDWR | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
+    int fd = shm_open(shm_name, O_RDWR | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
     if (fd == -1) {
         return NULL;
-
     }
 
     if (ftruncate(fd, (off_t) shm_size) == -1) {
@@ -65,6 +65,7 @@ SQueue sq_empty(size_t size) {
     sq->tail = 0;
     sq->length = 0;
     sq->size = size;
+    sq->shm_name = shm_name;
 
     if (sem_init(&sq->mshm, 1, 1) == -1) {
         __sq_cleanup(sq);
@@ -81,6 +82,27 @@ SQueue sq_empty(size_t size) {
         return NULL;
     }
 
+    return sq;
+}
+
+SQueue sq_open(const char *shm_name) {
+    int fd = shm_open(shm_name, O_RDWR, S_IRUSR | S_IWUSR);
+    if (fd == -1) {
+        return NULL;
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) == -1) {
+        return NULL;
+    }
+
+    struct __squeue *sq = mmap(NULL, (size_t) st.st_size,
+            PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (sq == MAP_FAILED) {
+        return NULL;
+    }
+
+    close(fd);
     return sq;
 }
 
