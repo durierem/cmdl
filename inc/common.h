@@ -2,6 +2,7 @@
 #define CONFIG__H
 
 #include <limits.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -17,11 +18,11 @@
 #endif
 
 #define THREAD_MAX  16
-#define CLIENT_MAX  32
 
 struct request {
     char cmd[ARG_MAX];
     char pipe[PATH_MAX];
+    pid_t pid;
 };
 
 #endif

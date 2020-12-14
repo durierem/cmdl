@@ -303,10 +303,28 @@ struct execmd_routine_args {
     bool *status;
 }
 
-void execmd_routine(struct request rq) {
+void execmd_routine(struct execmd_routine_args *args) {
     // fork/exec -> cmd > pipe
-}
 
+    switch (fork()) {
+    case -1:
+        die("fork");
+        break;
+
+    case 0:
+        syslog(LOG_INFO, "Executing %s", args->rq.cmd);
+        // rediriger sortie err/std vers pipe
+        char **cmd = parse_arg(args->rq.cmd);
+        execvp(cmd[0], cmd);
+        syslog(LOG_ERR, "...");
+        fprintf(stderr, "mesage d'erreur");
+        break;
+
+    default:
+      wait(NULL);
+      args->status = true;
+    }
+}
 
 void mainloop(void) {
     SQueue squeue = sq_empty(sizeof(struct request));
@@ -323,7 +341,7 @@ void mainloop(void) {
     while (sq_dequeue(squeue, &rq) == 0) {
         for (int i = 0; i < DAEMON_THREAD_MAX; i++) {
             if (poolav[i]) {
-                struct execmd_routine_args { rq, &poolav[i] };
+                struct execmd_routine_args { rq, &poolav[i] }; // malloc
                 int ret = pthread_create(threads[i], NULL,
                         (void (*)(void *)) execmd_routine, &args);
                 if (ret != 0) {
