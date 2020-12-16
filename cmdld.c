@@ -90,7 +90,7 @@ int unlock(void);
 /**
  * Démarre la boucle infinie principale du daemon.
  */
-void mainloop(void);
+void maind(void);
 
 /**
  * Gestionnaire de signaux du daemon.
@@ -109,6 +109,8 @@ pid_t retrievepid(void);
  * Affiche l'aide et quitte.
  */
 void usage(void);
+
+static SQueue g_queue;
 
 int main(int argc, char *argv[]) {
     /* Affiche l'aide si les options sont incorrectes */
@@ -151,9 +153,8 @@ int main(int argc, char *argv[]) {
 
     /* Construit le nom d'un tube nommé à partir du PID du processus */
     pid_t pid = getpid();
-    const char *pipeprefix = "/tmp/cmdld_pipe";
-    char pipename[strlen(pipeprefix) + 16];
-    sprintf(pipename, "%s%d", pipeprefix, pid);
+    char pipename[PATH_MAX];
+    sprintf(pipename, "/tmp/cmdld_pipe.%d", pid);
 
     /* Créé le tube de communication avec le daemon */
     if (mkfifo(pipename, S_IRUSR | S_IWUSR) == -1) {
@@ -169,7 +170,7 @@ int main(int argc, char *argv[]) {
 
     case 0:
         daemonise(pipename);
-        mainloop();
+        maind();
         exit(EXIT_SUCCESS);
         
     default:
@@ -194,6 +195,7 @@ int main(int argc, char *argv[]) {
 }
 
 void cleanup(void) {
+    sq_dispose(&g_queue);
     unlock();
     shm_unlink(DAEMON_SHM_PID);
     for (int i = 0; i < sysconf(_SC_OPEN_MAX); i++) {
@@ -239,17 +241,6 @@ void daemonise(const char *pipename) {
     /* Stocke le PID pour être contacté plus tard par un SITERM */
     if (storepid() == -1)
         die("storepid");
-
-    /* Gestion des signaux : bloque tout sauf SIGTERM */
-    struct sigaction act;
-    act.sa_handler = sighandler;
-    act.sa_flags = 0;
-    if (sigfillset(&act.sa_mask) == -1)
-        die("sigfillset");
-    if (sigprocmask(SIG_SETMASK, &act.sa_mask, NULL) == -1)
-        die("sigprocmask");
-    if (sigaction(SIGTERM, &act, NULL) == -1)
-        die("sigaction");
 }
 
 void die(const char *format, ...) {
@@ -298,71 +289,10 @@ int unlock(void) {
     return sem_unlink(DAEMON_RUN_MUTEX);
 }
 
-struct execmd_routine_args {
-    struct request rq;
-    bool *status;
-}
-
-void execmd_routine(struct execmd_routine_args *args) {
-    // fork/exec -> cmd > pipe
-
-    switch (fork()) {
-    case -1:
-        die("fork");
-        break;
-
-    case 0:
-        syslog(LOG_INFO, "Executing %s", args->rq.cmd);
-        // rediriger sortie err/std vers pipe
-        char **cmd = parse_arg(args->rq.cmd);
-        execvp(cmd[0], cmd);
-        syslog(LOG_ERR, "...");
-        fprintf(stderr, "mesage d'erreur");
-        break;
-
-    default:
-      wait(NULL);
-      args->status = true;
-    }
-}
-
-void mainloop(void) {
-    SQueue squeue = sq_empty(sizeof(struct request));
-    if (squeue == NULL) {
-        die("sq_empty");
-    }
-
-    pthread_t pool[DAEMON_THREAD_MAX];
-    bool poolav[DAEMON_THREAD_MAX] = { true };
-
-    syslog(LOG_INFO, "Daemon started");
-
-    struct request rq;
-    while (sq_dequeue(squeue, &rq) == 0) {
-        for (int i = 0; i < DAEMON_THREAD_MAX; i++) {
-            if (poolav[i]) {
-                struct execmd_routine_args { rq, &poolav[i] }; // malloc
-                int ret = pthread_create(threads[i], NULL,
-                        (void (*)(void *)) execmd_routine, &args);
-                if (ret != 0) {
-                    die("pthread_create");
-                }
-                goto next_request;
-            }
-        }
-
-        if (kill(rq->pid, SIGUSR1) == -1) {
-            die("kill");
-        }
-next_request:
-        /* EMPTY */
-    }
-}
-
 void sighandler(int sig) {
     if (sig == SIGTERM) {
-        syslog(LOG_INFO, "Daemon terminated");
         cleanup();
+        syslog(LOG_INFO, "Daemon terminated");
         exit(EXIT_SUCCESS);
     }
 }
@@ -406,3 +336,38 @@ void usage(void) {
     exit(EXIT_FAILURE);
 }
 
+void maind(void) {
+    /* Affecte sighandler() à la gestion de SIGTERM */
+    struct sigaction act;
+    act.sa_handler = sighandler;
+    act.sa_flags = 0;
+    if (sigfillset(&act.sa_mask) == -1) {
+        die("sigfillset");
+    }
+    if (sigaction(SIGTERM, &act, NULL) == -1) {
+        die("sigaction");
+    }
+    
+
+    /* Masque tous les signaux sauf SIGTERM */
+    sigset_t masked;
+    if (sigfillset(&masked) == -1) {
+        die("sigfillset");
+    }
+    if (sigdelset(&masked, SIGTERM) == -1) {
+        die("sigdelset");
+    }
+    if (sigprocmask(SIG_SETMASK, &masked, NULL) == -1) {
+       die("sigprocmask");
+    }
+    
+    g_queue = sq_empty(SHM_QUEUE, sizeof(struct request));
+    if (sq == NULL) {
+        die("sq_empty");
+    }
+
+    syslog(LOG_INFO, "Daemon started");
+
+    struct request rq;
+    while (sq_dequeue(sq, &rq) == 0);
+}
