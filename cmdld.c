@@ -10,27 +10,20 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <syslog.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "common.h"
 #include "squeue.h"
 
+/* --- DIVERS -------------------------------------------------------------- */
+
 /* Les deux options possibles sur la ligne de commande */
 #define OPT_START "start"
 #define OPT_STOP "stop"
 #define opt_test(opt) strcmp(opt, argv[1]) == 0 
-
-/* Chemin vers le fichier de log du daemon */
-#define LOG_FILE strcat(getenv("HOME"), "/.cmdld.log")
-
-/* Nom associé au sémaphore qui assure l'unicité du daemon */
-#define DAEMON_RUN_MUTEX "/cmdld_run_mutex"
-
-/* Nom associé au SHM pour stocker le PID du daemon */
-#define DAEMON_SHM_PID "/cmdld_shm_pid"
-
-#define DAEMON_THREAD_MAX 4
 
 /**
  * Libère diverses ressources allouées pour le programme.
@@ -40,19 +33,6 @@
  * sémaphores et segments de mémoire partagée.
  */
 void cleanup(void);
-
-/**
- * Lance le processus de daemonisation.
- *
- * La daemonisation crée un processus fils détaché de tout terminal dont
- * l'entrée standard et les sorties standard et d'erreur sont redirigées vers
- * /dev/null.
- * À la fin du processus, le daemon ainsi créé contacte le processus parent
- * avec pipename.
- *
- * @param pipename Le nom du tube pour la communication avec le parent.
- */
-void daemonise(const char *pipename);
 
 /**
  * Termine le processus avec le code de retour EXIT_FAILURE.
@@ -72,6 +52,32 @@ void die(const char *format, ...);
  * laquelle l'erreur à été lancée.
  */
 #define died(msg, ...) die("(%s:%d) " msg, __FILE__, __LINE__, #__VA_ARGS__)
+
+/**
+ * Affiche l'aide et quitte.
+ */
+void usage(void);
+
+/* --- DAEMON -------------------------------------------------------------- */
+
+/* Nom associé au sémaphore qui assure l'unicité du daemon */
+#define DAEMON_RUN_MUTEX "/cmdld_run_mutex"
+
+/* Nom associé au SHM pour stocker le PID du daemon */
+#define DAEMON_SHM_PID "/cmdld_shm_pid"
+
+/**
+ * Lance le processus de daemonisation.
+ *
+ * La daemonisation crée un processus fils détaché de tout terminal dont
+ * l'entrée standard et les sorties standard et d'erreur sont redirigées vers
+ * /dev/null.
+ * À la fin du processus, le daemon ainsi créé contacte le processus parent
+ * avec pipename.
+ *
+ * @param pipename Le nom du tube pour la communication avec le parent.
+ */
+void daemonise(const char *pipename);
 
 /**
  * Tente de verouiller le processus pour assurer son unicité.
@@ -105,12 +111,47 @@ void sighandler(int sig);
 pid_t storepid(void);
 pid_t retrievepid(void);
 
-/**
- * Affiche l'aide et quitte.
- */
-void usage(void);
+/* --- WORKERS ------------------------------------------------------------- */
 
-static SQueue g_queue;
+/* Nombre maximum de workers */
+#define DAEMON_WORKER_MAX 4
+
+/**
+ * Structure contenant les informations d'un worker.
+ *
+ * @field   id      Un numéro d'identification.
+ * @field   th      Le thread associé.
+ * @field   mutex   Sémaphore de mise en attente.
+ * @field   avail   Indique la disponibilité du worker.
+ * @field   rq      La requête qu'exécute le worker.
+ */
+struct worker {
+    int id;
+    pthread_t th;
+    sem_t mutex;
+    bool avail;
+    struct request rq;
+};
+
+/**
+ * Fonction de démarrage des workers.
+ *
+ * La fonction lance une boucle infinie et le thread associé au worker se met
+ * en attente d'une requête. La requête est effectuée dans un processus fils,
+ * et une entrée est ajoutée aux logs du daemon.
+ *
+ * @arg wk Un pointeur vers un worker.
+ */
+void *wkstart(struct worker *wk);
+
+/**
+ * Transforme une chaîne de caractère en un tableau de mots la constituant.
+ */
+char **parse_arg(const char *str);
+
+/* --- MAIN ---------------------------------------------------------------- */
+
+static SQueue g_queue; /* La file en mémoire partagée */
 
 int main(int argc, char *argv[]) {
     /* Affiche l'aide si les options sont incorrectes */
@@ -194,6 +235,8 @@ int main(int argc, char *argv[]) {
     return EXIT_SUCCESS;
 }
 
+/* ------------------------------------------------------------------------- */
+
 void cleanup(void) {
     sq_dispose(&g_queue);
     unlock();
@@ -205,6 +248,30 @@ void cleanup(void) {
         }
     }
 }
+
+void die(const char *format, ...) {
+    /* Garde le code d'erreur initial si une autre erreur survient */
+    int errcode = errno; 
+
+    va_list args;
+    va_start(args, format);
+    char msg[256]; /* /!\ potentiel overflow  */
+    vsnprintf(msg, sizeof(msg), format, args);
+    va_end(args);
+
+    syslog(LOG_ERR, "Daemon died: '%s', errno=%d '%s'",
+            msg, errcode, strerror(errcode));
+
+    cleanup();
+    exit(EXIT_FAILURE);
+}
+
+void usage(void) {
+    printf("Usage: cmdld <start | stop>\n");
+    exit(EXIT_FAILURE);
+}
+
+/* ------------------------------------------------------------------------- */
 
 void daemonise(const char *pipename) {
     /* Détache le daemon de la session actuelle */
@@ -218,7 +285,7 @@ void daemonise(const char *pipename) {
     /* Permet aux appels systèmes d'utiliser leur propre umask */
     umask(0);
 
-    /* Redirige STDIN vers /dev/null */
+    /* Redirige STDIN, STDOUT et STDERR vers /dev/null */
     int fd = open("/dev/null", O_RDWR);
     if (fd == -1)
         die("open");
@@ -238,27 +305,11 @@ void daemonise(const char *pipename) {
     if (close(fd) == -1)
         die("close");
 
-    /* Stocke le PID pour être contacté plus tard par un SITERM */
+    /* Stocke le PID pour être contacté plus tard par un SIGTERM */
     if (storepid() == -1)
         die("storepid");
 }
 
-void die(const char *format, ...) {
-    /* Garde le code d'erreur initial si une autre erreur survient */
-    int errcode = errno; 
-
-    va_list args;
-    va_start(args, format);
-    char msg[256]; /* /!\ potentiel overflow  */
-    vsnprintf(msg, sizeof(msg), format, args);
-    va_end(args);
-
-    syslog(LOG_ERR, "Daemon died: '%s', errno=%d '%s'",
-            msg, errcode, strerror(errcode));
-
-    cleanup();
-    exit(EXIT_FAILURE);
-}
 
 /* Note : l'appel à sem_unlink() est relégué à la fonction unlock().
  * Cela permet de garder le sémaphore en mémoire pour permettre à
@@ -287,6 +338,75 @@ int trylock(void) {
 
 int unlock(void) {
     return sem_unlink(DAEMON_RUN_MUTEX);
+}
+
+void maind(void) {
+    /* Affecte sighandler() à la gestion de SIGTERM */
+    struct sigaction act;
+    act.sa_handler = sighandler;
+    act.sa_flags = 0;
+    if (sigfillset(&act.sa_mask) == -1) {
+        die("sigfillset");
+    }
+    if (sigaction(SIGTERM, &act, NULL) == -1) {
+        die("sigaction");
+    }
+    
+    /* Masque tous les signaux sauf SIGTERM */
+    sigset_t masked;
+    if (sigfillset(&masked) == -1) {
+        die("sigfillset");
+    }
+    if (sigdelset(&masked, SIGTERM) == -1) {
+        die("sigdelset");
+    }
+    if (sigprocmask(SIG_SETMASK, &masked, NULL) == -1) {
+       die("sigprocmask");
+    }
+    
+    /* Initialise la file de requêtes */
+    g_queue = sq_empty(SHM_QUEUE, sizeof(struct request));
+    if (g_queue == NULL) {
+        die("sq_empty");
+    }
+
+    struct worker wks[DAEMON_WORKER_MAX];
+
+    for (int i = 0; i < DAEMON_WORKER_MAX; i++) {
+        wks[i].id = i;
+        int ret = pthread_create(&wks[i].th, NULL, (void *(*)(void *)) wkstart,  
+                &wks[i]);
+        if (ret != 0) {
+            die("(pthread_create) failed to create worker");
+        }
+        wks[i].avail = true;
+        if (sem_init(&wks[i].mutex, 0, 0) == -1) {
+            die("(sem_init) failed to initialise worker's mutex");
+        }
+    }
+
+    syslog(LOG_INFO, "Daemon started with %d workers", DAEMON_WORKER_MAX);
+
+    struct request rq;
+    while (sq_dequeue(g_queue, &rq) == 0) {
+        bool wk_found = false;
+        for (int i = 0; i < DAEMON_WORKER_MAX; i++) {
+            if (wks[i].avail) {
+                wk_found = true;
+                memcpy(&wks[i].rq, &rq, sizeof(struct request));
+                if (sem_post(&wks[i].mutex) == -1) {
+                    die("(sem_post) failed to unlock worker %d", i);
+                }
+                break;
+            }
+        }
+
+        if (!wk_found) {
+            if (kill(rq.pid, SIGUSR1) == -1) {
+                die("(kill) failed to send SIGUSR1 to process %d", rq.pid);
+            }
+        }
+    }
 }
 
 void sighandler(int sig) {
@@ -331,43 +451,98 @@ pid_t retrievepid(void) {
     return *((pid_t *) mmap(NULL, shm_size, PROT_READ, MAP_SHARED, fd, 0));
 }
 
-void usage(void) {
-    printf("Usage: cmdld <start | stop>\n");
-    exit(EXIT_FAILURE);
+/* ------------------------------------------------------------------------- */
+
+void *wkstart(struct worker *wk) {
+    while (1) {
+        if (sem_wait(&wk->mutex) == -1) {
+            die("Wk %d: (sem_wait) failed to lock worker's mutex", wk->id);
+        }
+
+        wk->avail = false;
+
+        int fd;
+        int status;
+        time_t tstart = time(NULL);
+
+        switch (fork()) {
+        case -1:
+            die("fork");
+            break;
+
+        case 0:
+            fd = open(wk->rq.pipe, O_WRONLY);
+            if (fd == -1) {
+                syslog(LOG_ERR, "Wk %d: (open) failed to open '%s'", wk->id,
+                        wk->rq.pipe);
+                exit(EXIT_FAILURE);
+            }
+            if (dup2(fd, STDOUT_FILENO) == -1) {
+                syslog(LOG_ERR, "Wk %d: (dup2) failed to redirect STDOUT",
+                        wk->id);
+                exit(EXIT_FAILURE);
+            }
+            if (close(fd) == -1) {
+                syslog(LOG_ERR, "Wk %d: (close) failed to close '%s'", wk->id,
+                        wk->rq.pipe);
+            }
+
+            char **cmd = parse_arg(wk->rq.cmd);
+            syslog(LOG_INFO, "Wk %d: starts job '%s'", wk->id, wk->rq.cmd);
+            execvp(cmd[0], cmd);
+            syslog(LOG_ERR, "Wk %d: (evecvp) failed to execute '%s'", wk->id,
+                    wk->rq.cmd);
+            exit(EXIT_FAILURE);
+            break;
+
+        default:
+            wait(&status);
+            syslog(status == EXIT_SUCCESS ? LOG_INFO : LOG_ERR,
+                    "Wk %d: finished job (%lds) with status %d",
+                    wk->id, time(NULL) - tstart, status);
+            if (status != EXIT_SUCCESS) {
+                syslog(LOG_DEBUG, "Sending SIGUSR2");
+                if (kill(wk->rq.pid, SIGUSR2) == -1) {
+                    syslog(LOG_ERR, "Wk %d: (kill) failed to send SIGUSR2",
+                            wk->id);
+                }
+            }
+            wk->avail = true;
+        }
+    }
 }
 
-void maind(void) {
-    /* Affecte sighandler() à la gestion de SIGTERM */
-    struct sigaction act;
-    act.sa_handler = sighandler;
-    act.sa_flags = 0;
-    if (sigfillset(&act.sa_mask) == -1) {
-        die("sigfillset");
-    }
-    if (sigaction(SIGTERM, &act, NULL) == -1) {
-        die("sigaction");
+
+
+char **parse_arg(const char *arg) {
+    size_t nb_words = 1;
+    for (size_t i = 0; i < strlen(arg); i++) {
+        if (arg[i] == ' ') {
+            nb_words++;
+        }
     }
     
-
-    /* Masque tous les signaux sauf SIGTERM */
-    sigset_t masked;
-    if (sigfillset(&masked) == -1) {
-        die("sigfillset");
-    }
-    if (sigdelset(&masked, SIGTERM) == -1) {
-        die("sigdelset");
-    }
-    if (sigprocmask(SIG_SETMASK, &masked, NULL) == -1) {
-       die("sigprocmask");
-    }
-    
-    g_queue = sq_empty(SHM_QUEUE, sizeof(struct request));
-    if (sq == NULL) {
-        die("sq_empty");
+    char **result = malloc(nb_words * sizeof(char *) + 1);
+    if (result == NULL) {
+        perror("malloc()");
+        exit(EXIT_FAILURE);
     }
 
-    syslog(LOG_INFO, "Daemon started");
+    char *argcp = malloc(strlen(arg));
+    if (argcp == NULL) {
+        perror("malloc()");
+        exit(EXIT_FAILURE);
+    }
+    strcpy(argcp, arg);
 
-    struct request rq;
-    while (sq_dequeue(sq, &rq) == 0);
+    char *token = strtok(argcp, " ");
+    int i = 0;
+    while (token != NULL) {
+        result[i] = token;
+        token = strtok(NULL, " ");
+        i++;
+    }
+    result[nb_words + 1] = NULL;
+
+    return result;
 }

@@ -21,7 +21,7 @@ CFLAGS = $(MCFLAGS) -std=c11 -O2 -Wall -Wconversion -Werror -Wextra \
 LDFLAGS = -lrt -pthread -Wl,-z,relro,-z,now -pie
 
 # Liste des objets
-objects = cmdl.o cmdld.o $(srcdir)/logger.o $(srcdir)/squeue.o $(testdir)/test_squeue.o
+objects = cmdl.o cmdld.o $(srcdir)/squeue.o $(testdir)/test_squeue.o
 
 # Liste des exécutables finaux
 executables = cmdl cmdld
@@ -35,7 +35,7 @@ test: $(tests)
 
 cmdl: cmdl.o $(srcdir)/squeue.o
 	$(CC) $^ $(LDFLAGS) -o $@
-cmdld: cmdld.o $(srcdir)/logger.o $(srcdir)/squeue.o
+cmdld: cmdld.o $(srcdir)/squeue.o
 	$(CC) $^ $(LDFLAGS) -o $@
 $(testdir)/test_squeue: $(testdir)/test_squeue.o $(srcdir)/squeue.o
 	$(CC) $^ $(LDFLAGS) -o $@
@@ -46,7 +46,6 @@ clean:
 
 # Dépendances des fichiers objets (règles implicites)
 cmdl.o: cmdl.c $(incdir)/common.h $(incdir)/squeue.h
-cmdld.o: cmdld.c $(incdir)/common.h $(incdir)/logger.h $(incdir)/squeue.h
-logger.o: $(srcdir)/logger.c $(incdir)/common.h $(incdir)/logger.h
+cmdld.o: cmdld.c $(incdir)/common.h $(incdir)/squeue.h
 squeue.o: $(srcdir)/squeue.c $(incdir)/common.h $(incdir)/squeue.h
 test_squeue.o: $(srcdir)/squeue.c $(incdir)/squeue.h

@@ -2,9 +2,6 @@
 #define CONFIG__H
 
 #include <limits.h>
-#include <pthread.h>
-#include <stdlib.h>
-#include <string.h>
 
 /* Nom associé au SHM pour stocker la file */
 #define SHM_QUEUE "/cmdl_shm_queue"
