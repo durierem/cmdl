@@ -16,6 +16,7 @@
 #include <unistd.h>
 
 #include "common.h"
+#include "config.h"
 #include "squeue.h"
 
 /* --- DIVERS -------------------------------------------------------------- */
@@ -23,7 +24,10 @@
 /* Les deux options possibles sur la ligne de commande */
 #define OPT_START "start"
 #define OPT_STOP "stop"
-#define opt_test(opt) strcmp(opt, argv[1]) == 0 
+#define opt_test(opt) strcmp(opt, argv[1]) == 0
+
+/* Le chemin vers le fichier de configuration du daemon */
+#define g_config_FILE "cmdld.conf"
 
 /**
  * Libère diverses ressources allouées pour le programme.
@@ -113,9 +117,6 @@ pid_t retrievepid(void);
 
 /* --- WORKERS ------------------------------------------------------------- */
 
-/* Nombre maximum de workers */
-#define DAEMON_WORKER_MAX 4
-
 /**
  * Structure contenant les informations d'un worker.
  *
@@ -151,7 +152,8 @@ char **parse_arg(const char *str);
 
 /* --- MAIN ---------------------------------------------------------------- */
 
-static SQueue g_queue; /* La file en mémoire partagée */
+static SQueue g_queue;          /* La file en mémoire partagée */
+static struct config g_config;  /* La configuration du daemon */
 
 int main(int argc, char *argv[]) {
     /* Affiche l'aide si les options sont incorrectes */
@@ -187,6 +189,11 @@ int main(int argc, char *argv[]) {
         }
 
         exit(EXIT_SUCCESS);
+    }
+
+    if (config_load(&g_config, g_config_FILE) == -1) {
+        fprintf(stderr, "Error: failed to load configuration file.\n");
+        exit(EXIT_FAILURE);
     }
 
     /* Ouvre la connexion au système de log */
@@ -365,14 +372,15 @@ void maind(void) {
     }
     
     /* Initialise la file de requêtes */
-    g_queue = sq_empty(SHM_QUEUE, sizeof(struct request));
+    g_queue = sq_empty(SHM_QUEUE, sizeof(struct request),
+                       (size_t) g_config.REQUEST_QUEUE_MAX);
     if (g_queue == NULL) {
         die("sq_empty");
     }
 
-    struct worker wks[DAEMON_WORKER_MAX];
+    struct worker wks[g_config.DAEMON_WORKER_MAX];
 
-    for (int i = 0; i < DAEMON_WORKER_MAX; i++) {
+    for (int i = 0; i < g_config.DAEMON_WORKER_MAX; i++) {
         wks[i].id = i;
         int ret = pthread_create(&wks[i].th, NULL, (void *(*)(void *)) wkstart,  
                 &wks[i]);
@@ -385,12 +393,12 @@ void maind(void) {
         }
     }
 
-    syslog(LOG_INFO, "Daemon started with %d workers", DAEMON_WORKER_MAX);
+    syslog(LOG_INFO, "Daemon started with %d workers", g_config.DAEMON_WORKER_MAX);
 
     struct request rq;
     while (sq_dequeue(g_queue, &rq) == 0) {
         bool wk_found = false;
-        for (int i = 0; i < DAEMON_WORKER_MAX; i++) {
+        for (int i = 0; i < g_config.DAEMON_WORKER_MAX; i++) {
             if (wks[i].avail) {
                 wk_found = true;
                 memcpy(&wks[i].rq, &rq, sizeof(struct request));
@@ -488,6 +496,14 @@ void *wkstart(struct worker *wk) {
             }
 
             char **cmd = parse_arg(wk->rq.cmd);
+            int i = 0;
+            char *str = cmd[i];
+            while (str != NULL) {
+                syslog(LOG_DEBUG, "%s", str);
+                i++;
+                str = cmd[i];
+            }
+
             syslog(LOG_INFO, "Wk %d: starts job '%s'", wk->id, wk->rq.cmd);
             execvp(cmd[0], cmd);
             syslog(LOG_ERR, "Wk %d: (evecvp) failed to execute '%s'", wk->id,
@@ -501,7 +517,6 @@ void *wkstart(struct worker *wk) {
                     "Wk %d: finished job (%lds) with status %d",
                     wk->id, time(NULL) - tstart, status);
             if (status != EXIT_SUCCESS) {
-                syslog(LOG_DEBUG, "Sending SIGUSR2");
                 if (kill(wk->rq.pid, SIGUSR2) == -1) {
                     syslog(LOG_ERR, "Wk %d: (kill) failed to send SIGUSR2",
                             wk->id);
@@ -522,12 +537,14 @@ char **parse_arg(const char *arg) {
         }
     }
     
+    // char *result[nb_words * sizeof(char *) + 1];
     char **result = malloc(nb_words * sizeof(char *) + 1);
     if (result == NULL) {
         perror("malloc()");
         exit(EXIT_FAILURE);
     }
 
+    // char argcp[strlen(arg)];
     char *argcp = malloc(strlen(arg));
     if (argcp == NULL) {
         perror("malloc()");

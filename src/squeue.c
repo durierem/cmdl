@@ -11,14 +11,14 @@
 #include <unistd.h>
 
 #include "squeue.h"
-#include "common.h"
 
 struct __squeue {
     const char *shm_name;   /* Nom de la SHM associée à la file */
-    int head;               /* Indice de tête de file */
-    int tail;               /* Indice de queue de file */
+    size_t head;            /* Indice de tête de file */
+    size_t tail;            /* Indice de queue de file */
     size_t size;            /* Taille des éléments de la file */
     size_t length;          /* Longueur courante de la file */
+    size_t max_length;      /* Longueur maximale de la file */
     sem_t mshm;             /* Mutex pour l'accès à la SHM */
     sem_t mnfull;           /* Mutex bloquant lorsque la file est pleine */
     sem_t mnempty;          /* Mutex bloquant lorsque la file est vide */
@@ -41,8 +41,8 @@ static void __sq_cleanup(struct __squeue *sq) {
     shm_unlink(sq->shm_name);
 }
 
-SQueue sq_empty(const char *shm_name, size_t size) {
-    size_t shm_size = sizeof(struct __squeue) + SQ_LENGTH_MAX * size;
+SQueue sq_empty(const char *shm_name, size_t size, size_t max_length) {
+    size_t shm_size = sizeof(struct __squeue) + max_length * size;
 
     int fd = shm_open(shm_name, O_RDWR | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
     if (fd == -1) {
@@ -64,6 +64,7 @@ SQueue sq_empty(const char *shm_name, size_t size) {
     sq->head = 0;
     sq->tail = 0;
     sq->length = 0;
+    sq->max_length = max_length;
     sq->size = size;
     sq->shm_name = shm_name;
 
@@ -72,7 +73,7 @@ SQueue sq_empty(const char *shm_name, size_t size) {
         return NULL;
     }
 
-    if (sem_init(&sq->mnfull, 1, SQ_LENGTH_MAX) == -1) {
+    if (sem_init(&sq->mnfull, 1, (unsigned int) sq->max_length) == -1) {
         __sq_cleanup(sq);
         return NULL;
     }
@@ -122,8 +123,8 @@ int sq_enqueue(SQueue sq, const void *obj) {
         return FUN_FAILURE;
     }
 
-    memcpy(sq->data + (size_t) sq->tail * sq->size, obj, sq->size);
-    sq->tail = (sq->tail + 1) % SQ_LENGTH_MAX;
+    memcpy(sq->data + sq->tail * sq->size, obj, sq->size);
+    sq->tail = (sq->tail + 1) % sq->max_length;
     sq->length++;
     
     if (sem_post(&sq->mshm) == -1) {
@@ -150,8 +151,8 @@ int sq_dequeue(SQueue sq, void *buf) {
         return FUN_FAILURE;
     }
 
-    memcpy(buf, sq->data + (size_t) sq->head * sq->size, sq->size);
-    sq->head = (sq->head + 1) % SQ_LENGTH_MAX;
+    memcpy(buf, sq->data + sq->head * sq->size, sq->size);
+    sq->head = (sq->head + 1) % sq->max_length;
     sq->length--;
 
     if (sem_post(&sq->mshm) == -1) {
@@ -174,15 +175,15 @@ int sq_apply(SQueue sq, int (*fun)(void *)) {
         return FUN_FAILURE;
     }
 
-    int i = sq->head;
-    char *e = sq->data + (size_t) sq->head * sq->size;
+    size_t i = sq->head;
+    char *e = sq->data + sq->head * sq->size;
     do {
         int ret = fun(e);
         if (ret != 0) {
             return ret;
         }
-        i = (i + 1) % SQ_LENGTH_MAX;
-        e = sq->data + (size_t) i * sq->size;
+        i = (i + 1) % sq->max_length;
+        e = sq->data + i * sq->size;
     } while (i != sq->tail);
 
     return FUN_SUCCESS;

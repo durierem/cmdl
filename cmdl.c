@@ -1,7 +1,3 @@
-/* TODO:
- * - chronométrage du temps nécessaire pour une commande (daemon?)
- */
-
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
@@ -22,6 +18,7 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
     
+    /* Affecte la gestion de SIGUSR1 et SIGUSR2 a sighandler() */
     struct sigaction act;
     act.sa_handler = sighandler;
     act.sa_flags = 0;
@@ -38,10 +35,23 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
+    /* Assure le passage de SIGUSR1 et SIGUSR2 */
+    sigset_t unblocked;
+    if (sigaddset(&unblocked, SIGUSR1) == -1) {
+        perror("sigaddset");
+        exit(EXIT_FAILURE);
+    }
+    if (sigaddset(&unblocked, SIGUSR2) == -1) {
+        perror("sigaddset");
+        exit(EXIT_FAILURE);
+    }
+    if (sigprocmask(SIG_UNBLOCK, &unblocked, NULL) == -1) {
+        perror("sigprocmask");
+        exit(EXIT_FAILURE);
+    }
+
     char cmd[ARG_MAX];
-    memcpy(cmd, argv[1], strlen(argv[1]) > sizeof(cmd) ?
-                         sizeof(cmd) :
-                         strlen(argv[1]));
+    snprintf(cmd, sizeof(cmd), argv[1]);
 
     pid_t pid = getpid();
 

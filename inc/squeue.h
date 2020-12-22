@@ -7,7 +7,7 @@
 
 typedef struct __squeue * SQueue;
 
-extern SQueue sq_empty(const char *shm_name, size_t size);
+extern SQueue sq_empty(const char *shm_name, size_t size, size_t length);
 extern SQueue sq_open(const char *shm_name);
 extern int sq_enqueue(SQueue sq, const void *obj);
 extern int sq_dequeue(SQueue sq, void *buf);
