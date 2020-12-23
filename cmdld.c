@@ -98,7 +98,7 @@ int trylock(void);
 int unlock(void);
 
 /**
- * Démarre la boucle infinie principale du daemon.
+ * Démarre le programme principal du daemon.
  */
 void maind(void);
 
@@ -157,7 +157,7 @@ size_t argcount(const char *str);
  * Construit un tableau d'arguments à partir de str.
  *
  * Le tableau argv doit être de longueur au moins égale à argcount(str) + 1.
- * Il est utilisé pour y placer les pointeurs vers les chaînes dans buf.Le
+ * Il est utilisé pour y placer les pointeurs vers les chaînes dans buf. Le
  * dernier élément est un pointeur NULL.
  *
  * Le tampon buf doit être de taille au moins égale à la taille de la zone
@@ -165,11 +165,11 @@ size_t argcount(const char *str);
  * chaînes que sont les arguments extraits de str.
  *
  * En cas de non respect des contraintes de taille sur argv et buf, le
- * comprtement de strtoargs est indéfini.
+ * comportement de strtoargs est indéfini.
  *
- * @arg str     La chaîne à analyser.
- * @arg argv    Le tableau d'arguments à remplir.
- * @arg buf     Un tampon vide de même taille que str.
+ * @arg     str     La chaîne à analyser.
+ * @arg     argv    Le tableau d'arguments à remplir.
+ * @arg     buf     Un tampon vide de même taille que str.
  */
 void strtoargs(const char *str, char *argv[], char *buf);
 
@@ -177,6 +177,7 @@ void strtoargs(const char *str, char *argv[], char *buf);
 
 static SQueue g_queue;          /* La file en mémoire partagée */
 static struct config g_config;  /* La configuration du daemon */
+static pthread_t *g_threads;
 
 int main(int argc, char *argv[]) {
     /* Affiche l'aide si les options sont incorrectes */
@@ -214,6 +215,7 @@ int main(int argc, char *argv[]) {
         exit(EXIT_SUCCESS);
     }
 
+    /* Charge la configuration depuis CFG_FILE */
     if (config_load(&g_config, CFG_FILE) == -1) {
         fprintf(stderr, "Error: failed to load configuration file.\n");
         exit(EXIT_FAILURE);
@@ -268,15 +270,25 @@ int main(int argc, char *argv[]) {
 /* ------------------------------------------------------------------------- */
 
 void cleanup(void) {
-    sq_dispose(&g_queue);
-    unlock();
-    shm_unlink(DAEMON_SHM_PID);
+    /* Terminaison des threads */
+    if (g_threads != NULL) {
+        for (size_t i = 0; i < g_config.DAEMON_WORKER_MAX; i++) {
+            pthread_cancel(g_threads[i]);
+            pthread_join(g_threads[i], NULL);
+        }
+        free(g_threads);
+    }
+
+    /* Fermeture des descripteurs de fichiers */
     for (int i = 0; i < sysconf(_SC_OPEN_MAX); i++) {
-        /* Stoppe sur le premier descripteur non valide */
         if (close(i) == -1 && errno == EBADF) {
             break;
         }
     }
+
+    sq_dispose(&g_queue);
+    shm_unlink(DAEMON_SHM_PID);
+    unlock();
 }
 
 void die(const char *format, ...) {
@@ -401,27 +413,41 @@ void maind(void) {
         die("sq_empty");
     }
 
+    /* Tableau des workers */
     struct worker wks[g_config.DAEMON_WORKER_MAX];
 
-    for (int i = 0; i < g_config.DAEMON_WORKER_MAX; i++) {
-        wks[i].id = i;
-        int ret = pthread_create(&wks[i].th, NULL, (void *(*)(void *)) wkstart,  
-                &wks[i]);
+    /* Allocation de la liste globale des threads */
+    g_threads = malloc(g_config.DAEMON_WORKER_MAX * sizeof(pthread_t));
+    if (g_threads == NULL) {
+        die("(malloc) failed to malloc for g_threads");
+    }
+
+    /* Initialise les workers */
+    for (size_t i = 0; i < g_config.DAEMON_WORKER_MAX; i++) {
+        wks[i].id = (int) i;
+
+        int ret = pthread_create(&wks[i].th, NULL,
+                (void *(*)(void *)) wkstart, &wks[i]);
         if (ret != 0) {
             die("(pthread_create) failed to create worker");
         }
+
+        g_threads[i] = wks[i].th;
         wks[i].avail = true;
+
         if (sem_init(&wks[i].mutex, 0, 0) == -1) {
             die("(sem_init) failed to initialise worker's mutex");
         }
     }
 
-    syslog(LOG_INFO, "Daemon started with %d workers", g_config.DAEMON_WORKER_MAX);
+    syslog(LOG_INFO, "Daemon started with %zu workers",
+            g_config.DAEMON_WORKER_MAX);
 
+    /* Boucle principale du daemon */
     struct request rq;
     while (sq_dequeue(g_queue, &rq) == 0) {
         bool wk_found = false;
-        for (int i = 0; i < g_config.DAEMON_WORKER_MAX; i++) {
+        for (size_t i = 0; i < g_config.DAEMON_WORKER_MAX; i++) {
             if (wks[i].avail) {
                 wk_found = true;
                 memcpy(&wks[i].rq, &rq, sizeof(struct request));
@@ -507,26 +533,26 @@ void *wkstart(struct worker *wk) {
         case 0:
             fd = open(wk->rq.pipe, O_WRONLY);
             if (fd == -1) {
-                syslog(LOG_ERR, "Wk %d: (open) failed to open '%s'", wk->id,
-                        wk->rq.pipe);
+                syslog(LOG_ERR, "Wk %d: (open) failed to open '%s' (%s)",
+                        wk->id, wk->rq.pipe, strerror(errno);
                 exit(EXIT_FAILURE);
             }
             if (dup2(fd, STDOUT_FILENO) == -1) {
-                syslog(LOG_ERR, "Wk %d: (dup2) failed to redirect STDOUT",
-                        wk->id);
+                syslog(LOG_ERR, "Wk %d: (dup2) failed to redirect STDOUT (%s)",
+                        wk->id, strerror(errno);
                 exit(EXIT_FAILURE);
             }
             if (close(fd) == -1) {
-                syslog(LOG_ERR, "Wk %d: (close) failed to close '%s'", wk->id,
-                        wk->rq.pipe);
+                syslog(LOG_ERR, "Wk %d: (close) failed to close '%s' (%s)",
+                        wk->id, wk->rq.pipe, strerror(errno);
             }
 
             strtoargs(wk->rq.cmd, argv, buf);
 
             syslog(LOG_INFO, "Wk %d: starts job '%s'", wk->id, wk->rq.cmd);
             execvp(argv[0], argv);
-            syslog(LOG_ERR, "Wk %d: (evecvp) failed to execute '%s'", wk->id,
-                    wk->rq.cmd);
+            syslog(LOG_ERR, "Wk %d: (evecvp) failed to execute '%s' (%s)",
+                wk->id, wk->rq.cmd, strerror(errno));
             exit(EXIT_FAILURE);
             break;
 
@@ -537,8 +563,8 @@ void *wkstart(struct worker *wk) {
                     wk->id, time(NULL) - tstart, status);
             if (status != EXIT_SUCCESS) {
                 if (kill(wk->rq.pid, SIGUSR2) == -1) {
-                    syslog(LOG_ERR, "Wk %d: (kill) failed to send SIGUSR2",
-                            wk->id);
+                    syslog(LOG_ERR, "Wk %d: (kill) failed to send SIGUSR2; %s",
+                            wk->id, strerror(errno));
                 }
             }
             wk->avail = true;

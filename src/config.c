@@ -63,17 +63,17 @@ int __load(enum __OPTION opt, const char *filename) {
 
 
 int config_load(struct config *ptr, const char *filename) {
-    int ret = __load(DAEMON_WORKER_MAX, filename);
+    int ret =  __load(DAEMON_WORKER_MAX, filename);
     if (ret == -1) {
         return -1;
     }
-    ptr->DAEMON_WORKER_MAX = ret;
+    ptr->DAEMON_WORKER_MAX = (size_t) ret;
 
     ret = __load(REQUEST_QUEUE_MAX, filename);
     if (ret == -1) {
         return -1;
     }
-    ptr->REQUEST_QUEUE_MAX = ret;
+    ptr->REQUEST_QUEUE_MAX = (size_t) ret;
 
     return 0;
 }
