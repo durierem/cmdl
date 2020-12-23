@@ -27,7 +27,7 @@
 #define opt_test(opt) strcmp(opt, argv[1]) == 0
 
 /* Le chemin vers le fichier de configuration du daemon */
-#define g_config_FILE "cmdld.conf"
+#define CFG_FILE "cmdld.conf"
 
 /**
  * Libère diverses ressources allouées pour le programme.
@@ -146,9 +146,32 @@ struct worker {
 void *wkstart(struct worker *wk);
 
 /**
- * Transforme une chaîne de caractère en un tableau de mots la constituant.
+ * Compte le nombre d'arguments présents dans str.
+ *
+ * @arg str La chaîne à analyser.
+ * @return Le nombre d'arguments dans str.
  */
-char **parse_arg(const char *str);
+size_t argcount(const char *str);
+
+/**
+ * Construit un tableau d'arguments à partir de str.
+ *
+ * Le tableau argv doit être de longueur au moins égale à argcount(str) + 1.
+ * Il est utilisé pour y placer les pointeurs vers les chaînes dans buf.Le
+ * dernier élément est un pointeur NULL.
+ *
+ * Le tampon buf doit être de taille au moins égale à la taille de la zone
+ * mémoire pointée par str (strlen(str) + 1). Il est utilisé pour y placer les
+ * chaînes que sont les arguments extraits de str.
+ *
+ * En cas de non respect des contraintes de taille sur argv et buf, le
+ * comprtement de strtoargs est indéfini.
+ *
+ * @arg str     La chaîne à analyser.
+ * @arg argv    Le tableau d'arguments à remplir.
+ * @arg buf     Un tampon vide de même taille que str.
+ */
+void strtoargs(const char *str, char *argv[], char *buf);
 
 /* --- MAIN ---------------------------------------------------------------- */
 
@@ -191,7 +214,7 @@ int main(int argc, char *argv[]) {
         exit(EXIT_SUCCESS);
     }
 
-    if (config_load(&g_config, g_config_FILE) == -1) {
+    if (config_load(&g_config, CFG_FILE) == -1) {
         fprintf(stderr, "Error: failed to load configuration file.\n");
         exit(EXIT_FAILURE);
     }
@@ -473,6 +496,9 @@ void *wkstart(struct worker *wk) {
         int status;
         time_t tstart = time(NULL);
 
+        char *argv[argcount(wk->rq.cmd) + 1];
+        char buf[strlen(wk->rq.cmd) + 1];
+
         switch (fork()) {
         case -1:
             die("fork");
@@ -495,17 +521,10 @@ void *wkstart(struct worker *wk) {
                         wk->rq.pipe);
             }
 
-            char **cmd = parse_arg(wk->rq.cmd);
-            int i = 0;
-            char *str = cmd[i];
-            while (str != NULL) {
-                syslog(LOG_DEBUG, "%s", str);
-                i++;
-                str = cmd[i];
-            }
+            strtoargs(wk->rq.cmd, argv, buf);
 
             syslog(LOG_INFO, "Wk %d: starts job '%s'", wk->id, wk->rq.cmd);
-            execvp(cmd[0], cmd);
+            execvp(argv[0], argv);
             syslog(LOG_ERR, "Wk %d: (evecvp) failed to execute '%s'", wk->id,
                     wk->rq.cmd);
             exit(EXIT_FAILURE);
@@ -527,39 +546,41 @@ void *wkstart(struct worker *wk) {
     }
 }
 
+size_t argcount(const char *str) {
+    if (*str == '\0') {
+        return 0;
+    }
 
-
-char **parse_arg(const char *arg) {
-    size_t nb_words = 1;
-    for (size_t i = 0; i < strlen(arg); i++) {
-        if (arg[i] == ' ') {
-            nb_words++;
+    size_t n = 1;
+    for (size_t i = 0; i < strlen(str); i++) {
+        if (str[i] == ' ' && str[i - 1] == '-' && str[i - 2] == '-') {
+            n++;
+            break;
+        }
+        if (str[i] == ' ') {
+            n++;
+            while (str[i++] == ' ');
         }
     }
-    
-    // char *result[nb_words * sizeof(char *) + 1];
-    char **result = malloc(nb_words * sizeof(char *) + 1);
-    if (result == NULL) {
-        perror("malloc()");
-        exit(EXIT_FAILURE);
-    }
 
-    // char argcp[strlen(arg)];
-    char *argcp = malloc(strlen(arg));
-    if (argcp == NULL) {
-        perror("malloc()");
-        exit(EXIT_FAILURE);
-    }
-    strcpy(argcp, arg);
+    return n;
+}
 
-    char *token = strtok(argcp, " ");
-    int i = 0;
-    while (token != NULL) {
-        result[i] = token;
-        token = strtok(NULL, " ");
+void strtoargs(const char *str, char *argv[], char *buf) {
+    memcpy(buf, str, strlen(str) + 1);
+
+    size_t i = 0;
+    size_t j = 0;
+
+    argv[j++] = buf;
+
+    while (j < argcount(str)) {
+        if (str[i] == ' ') {
+            buf[i] = 0;
+            argv[j++] = buf + i + 1;
+        }
         i++;
     }
-    result[nb_words + 1] = NULL;
 
-    return result;
+    argv[j] = NULL;
 }
