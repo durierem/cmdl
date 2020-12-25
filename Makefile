@@ -21,7 +21,8 @@ CFLAGS = $(MCFLAGS) -std=c11 -O2 -Wall -Wconversion -Werror -Wextra \
 LDFLAGS = -lrt -pthread -Wl,-z,relro,-z,now -pie
 
 # Liste des objets
-objects = cmdl.o cmdld.o $(srcdir)/squeue.o $(srcdir)/config.o $(testdir)/test_squeue.o
+objects = cmdl.o cmdld.o $(srcdir)/squeue.o $(srcdir)/config.o \
+	$(testdir)/test_squeue.o
 
 # Liste des exécutables finaux
 executables = cmdl cmdld

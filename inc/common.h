@@ -6,13 +6,19 @@
 /* Nom associé au SHM pour stocker la file */
 #define SHM_QUEUE "/cmdl_shm_queue"
 
+/* Longueur maximale de l'argument aux fonction exec (possiblement défini) */
 #ifndef ARG_MAX
 #define ARG_MAX 2048
 #endif
 
+/* Longueur maximale pour les noms de chemins (possiblement défini) */
 #ifndef PATH_MAX
 #define PATH_MAX 2048
 #endif
+
+/* Signaux communiquant l'état des requêtes entre le daemon et les clients */
+#define SIG_FAILURE SIGUSR1
+#define SIG_SUCCESS SIGUSR2
 
 /**
  * Structure représentant une requête.

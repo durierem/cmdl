@@ -1,2 +1,0 @@
-sleep 5
-bash -c -- "echo 'hello'; echo 'world'"

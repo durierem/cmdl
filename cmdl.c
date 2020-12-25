@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
@@ -18,7 +19,7 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
     
-    /* Affecte la gestion de SIGUSR1 et SIGUSR2 a sighandler() */
+    /* Affecte la gestion de SIG_FAILURE et SIG_SUCCESS a sighandler() */
     struct sigaction act;
     act.sa_handler = sighandler;
     act.sa_flags = 0;
@@ -26,29 +27,44 @@ int main(int argc, char *argv[]) {
         perror("sigfillset");
         exit(EXIT_FAILURE);
     }
-    if (sigaction(SIGUSR1, &act, NULL) == -1) {
+    if (sigaction(SIG_FAILURE, &act, NULL) == -1) {
         perror("sigaction");
         exit(EXIT_FAILURE);
     }
-    if (sigaction(SIGUSR2, &act, NULL) == -1) {
+    if (sigaction(SIG_SUCCESS, &act, NULL) == -1) {
         perror("sigaction");
         exit(EXIT_FAILURE);
     }
 
-    /* Assure le passage de SIGUSR1 et SIGUSR2 */
-    sigset_t unblocked;
-    if (sigaddset(&unblocked, SIGUSR1) == -1) {
+    /* Assure le passage de SIG_FAILURE */
+    sigset_t set;
+    if (sigemptyset(&set) == -1) {
+        perror("sigemptyset");
+        exit(EXIT_FAILURE);
+    }
+    if (sigaddset(&set, SIG_FAILURE) == -1) {
         perror("sigaddset");
         exit(EXIT_FAILURE);
     }
-    if (sigaddset(&unblocked, SIGUSR2) == -1) {
-        perror("sigaddset");
-        exit(EXIT_FAILURE);
-    }
-    if (sigprocmask(SIG_UNBLOCK, &unblocked, NULL) == -1) {
+    if (sigprocmask(SIG_UNBLOCK, &set, NULL) == -1) {
         perror("sigprocmask");
         exit(EXIT_FAILURE);
     }
+
+    /* Bloque temporairement le passage de SIG_SUCCESS */
+    if (sigemptyset(&set) == -1) {
+        perror("sigemptyset");
+        exit(EXIT_FAILURE);
+    }
+    if (sigaddset(&set, SIG_SUCCESS) == -1) {
+        perror("sigaddset");
+        exit(EXIT_FAILURE);
+    }
+    if (sigprocmask(SIG_BLOCK, &set, NULL) == -1) {
+        perror("sigprocmask");
+        exit(EXIT_FAILURE);
+    }
+
 
     char cmd[ARG_MAX];
     snprintf(cmd, sizeof(cmd), argv[1]);
@@ -75,14 +91,21 @@ int main(int argc, char *argv[]) {
     }
 
     if (mkfifo(pipe, S_IRUSR | S_IWUSR) == -1) {
-        fprintf(stderr, "Error: failed to create communication pipe.\n");
+        perror("mkfifo");
         exit(EXIT_FAILURE);
     }
+
     int fd = open(pipe, O_RDONLY);
     if (fd == -1) {
-        fprintf(stderr, "Error: failed to open communication pipe.\n");
+        perror("open");
         exit(EXIT_FAILURE);
     }
+
+    if (unlink(pipe) == -1) {
+        perror("unlink");
+        exit(EXIT_FAILURE);
+    }
+
 
     struct stat st;
     if (fstat(fd, &st) == -1) {
@@ -112,28 +135,44 @@ int main(int argc, char *argv[]) {
         } while (r > 0);
     }
 
+    if (sigprocmask(SIG_UNBLOCK, &set, NULL) == -1) {
+        perror("sigprocmask");
+        exit(EXIT_FAILURE);
+    }
+
+    if (sigfillset(&set) == -1) {
+        perror("sigfillset");
+        exit(EXIT_FAILURE);
+    }
+    if (sigdelset(&set, SIG_FAILURE) == -1) {
+        perror("sigdelset");
+        exit(EXIT_FAILURE);
+    }
+    if (sigdelset(&set, SIG_SUCCESS) == -1) {
+        perror("sigdelset");
+        exit(EXIT_FAILURE);
+    }
+    
+    sigsuspend(&set);
+    if (errno != EINTR) {
+        perror("sigsuspend");
+        exit(EXIT_FAILURE);
+    }
+
 exit:
     if (r == -1) {
         exit_status = EXIT_FAILURE;
     }
 
-    if (unlink(pipe) == -1) {
-        exit_status = EXIT_FAILURE;
-    }
-
-    if (close(fd) == -1) {
-        exit_status = EXIT_FAILURE;
-    }
     return exit_status;
 }
 
 void sighandler(int sig) {
-    if (sig == SIGUSR1) {
-        fprintf(stderr, "Error: no worker available, request aborted.\n");
+    if (sig == SIG_FAILURE) {
+        fprintf(stderr, "Error: request aborted.\n");
         exit(EXIT_FAILURE);
     }
-    if (sig == SIGUSR2) {
-        fprintf(stderr, "Error: request failed.\n");
-        exit(EXIT_FAILURE);
-    }
+    if (sig == SIG_SUCCESS) {
+        exit(EXIT_SUCCESS);
+    };
 }

@@ -61,16 +61,18 @@ int __load(enum __OPTION opt, const char *filename) {
     return ret;
 }
 
+#define VALID_DAEMON_WORKER_MAX(x) (1 <= x && x <= 64)
+#define VALID_REQUEST_QUEUE_MAX(x) (1 <= x && x <= 256)
 
 int config_load(struct config *ptr, const char *filename) {
     int ret =  __load(DAEMON_WORKER_MAX, filename);
-    if (ret == -1) {
+    if (ret == -1 || !VALID_DAEMON_WORKER_MAX(ret)) {
         return -1;
     }
     ptr->DAEMON_WORKER_MAX = (size_t) ret;
 
     ret = __load(REQUEST_QUEUE_MAX, filename);
-    if (ret == -1) {
+    if (ret == -1 || !VALID_REQUEST_QUEUE_MAX(ret)) {
         return -1;
     }
     ptr->REQUEST_QUEUE_MAX = (size_t) ret;
