@@ -172,5 +172,5 @@ void sighandler(int sig) {
     }
     if (sig == SIG_SUCCESS) {
         exit(EXIT_SUCCESS);
-    };
+    }
 }

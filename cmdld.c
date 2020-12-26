@@ -532,7 +532,8 @@ void *wkstart(struct worker *wk) {
         char *argv[argcount(wk->rq.cmd) + 1];
         char buf[strlen(wk->rq.cmd) + 1];
 
-        switch (fork()) {
+        pid_t pid = fork();
+        switch (pid) {
         case -1:
             syslog(LOG_ERR, "[wk#%02d] fork: failed to create child (%s)",
                     wk->id, strerror(errno));
@@ -566,12 +567,12 @@ void *wkstart(struct worker *wk) {
             break;
 
         default:
-            wait(&status);
+            waitpid(pid, &status, 0);
         }
 
         syslog(status == EXIT_SUCCESS ? LOG_INFO : LOG_ERR,
-                "[wk#%02d] finished job (%lds) with status %d",
-                wk->id, time(NULL) - tstart, status);
+                "[wk#%02d] finished job '%s' (%lds) with status %d",
+                wk->id, wk->rq.cmd, time(NULL) - tstart, status);
 
         int sig = (status == EXIT_SUCCESS ? SIG_SUCCESS : SIG_FAILURE);
         if (kill(wk->rq.pid, sig) == -1) {
@@ -581,7 +582,6 @@ void *wkstart(struct worker *wk) {
             syslog(LOG_DEBUG, "[wk#%02d] sent signal %d to %d",
                     wk->id, sig, wk->rq.pid);
         }
-
         wk->avail = true;
     }
 }
