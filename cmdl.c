@@ -11,6 +11,9 @@
 #include "common.h"
 #include "squeue.h"
 
+#define STRMEMCPY(dest, src) \
+    memcpy(dest, src, strlen(src) > sizeof(dest) ? sizeof(dest) : strlen(src)); 
+
 void sighandler(int sig);
 
 int main(int argc, char *argv[]) {
@@ -66,17 +69,13 @@ int main(int argc, char *argv[]) {
     }
 
     /* Création de la requête */
-    char cmd[ARG_MAX];
-    snprintf(cmd, sizeof(cmd), argv[1]);
-
     pid_t pid = getpid();
-
-    char pipe[PATH_MAX];
+    char pipe[PATH_MAX] = { 0 };
     snprintf(pipe, sizeof(pipe), "/tmp/cmdl_pipe_%d", pid);
 
     struct request rq;
-    snprintf(rq.cmd, sizeof(rq.cmd), cmd);
-    snprintf(rq.pipe, sizeof(rq.pipe), pipe);
+    STRMEMCPY(rq.cmd, argv[1]);
+    STRMEMCPY(rq.pipe, pipe);
     rq.pid = pid;
     
     /* Ouvre la file et enfile la requête */
