@@ -1,3 +1,4 @@
 *.o
 cmdl
 cmdld
+test/test_squeue

@@ -65,7 +65,7 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-
+    /* Création de la requête */
     char cmd[ARG_MAX];
     snprintf(cmd, sizeof(cmd), argv[1]);
 
@@ -79,6 +79,7 @@ int main(int argc, char *argv[]) {
     snprintf(rq.pipe, sizeof(rq.pipe), pipe);
     rq.pid = pid;
     
+    /* Ouvre la file et enfile la requête */
     SQueue sq = sq_open(SHM_QUEUE);
     if (sq == NULL) {
         fprintf(stderr, "Error: failed to reach daemon.\n");
@@ -90,6 +91,7 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
+    /* Créé et ouvre le tube de communication */
     if (mkfifo(pipe, S_IRUSR | S_IWUSR) == -1) {
         perror("mkfifo");
         exit(EXIT_FAILURE);
@@ -106,7 +108,7 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-
+    /* Lecture depuis le tube et écriture sur STDOUT */
     struct stat st;
     if (fstat(fd, &st) == -1) {
         perror("fstat");
@@ -120,7 +122,6 @@ int main(int argc, char *argv[]) {
     }
     ssize_t blksize_out = st.st_blksize;
 
-    int exit_status = EXIT_SUCCESS;
     char buf[blksize_in];
     ssize_t r;
     while ((r = read(fd, buf, (size_t) blksize_in)) > 0) {
@@ -128,18 +129,21 @@ int main(int argc, char *argv[]) {
         do {
             ssize_t btw = r > blksize_out ? blksize_out : r;
             if ((r = write(STDOUT_FILENO, buf_out, (size_t) btw)) == -1) {
-                goto exit;
+                perror("write");
+                exit(EXIT_FAILURE);
             }
             r -= btw;
             buf_out += btw;
         } while (r > 0);
     }
 
+    /* Débloque le passage de SIG_SUCCESS */
     if (sigprocmask(SIG_UNBLOCK, &set, NULL) == -1) {
         perror("sigprocmask");
         exit(EXIT_FAILURE);
     }
 
+    /* Place le processus en attente de SIG_SUCCESS */
     if (sigfillset(&set) == -1) {
         perror("sigfillset");
         exit(EXIT_FAILURE);
@@ -152,19 +156,13 @@ int main(int argc, char *argv[]) {
         perror("sigdelset");
         exit(EXIT_FAILURE);
     }
-    
     sigsuspend(&set);
     if (errno != EINTR) {
         perror("sigsuspend");
         exit(EXIT_FAILURE);
     }
 
-exit:
-    if (r == -1) {
-        exit_status = EXIT_FAILURE;
-    }
-
-    return exit_status;
+    return EXIT_SUCCESS;
 }
 
 void sighandler(int sig) {

@@ -177,7 +177,7 @@ void strtoargs(const char *str, char *argv[], char *buf);
 
 static SQueue g_queue;          /* La file en mémoire partagée */
 static struct config g_config;  /* La configuration du daemon */
-static pthread_t *g_threads;    /* Liste des threads associés aux workers */
+static struct worker *g_workers;    /* Liste des threads associés aux workers */
 
 int main(int argc, char *argv[]) {
     /* Affiche l'aide si les options sont incorrectes */
@@ -270,12 +270,14 @@ int main(int argc, char *argv[]) {
 
 void cleanup(void) {
     /* Terminaison des threads */
-    if (g_threads != NULL) {
+    if (g_workers != NULL) {
         for (size_t i = 0; i < g_config.DAEMON_WORKER_MAX; i++) {
-            pthread_cancel(g_threads[i]);
-            pthread_join(g_threads[i], NULL);
+            struct worker wk = g_workers[i];
+            pthread_cancel(wk.th);
+            pthread_join(wk.th, NULL);
+            kill(wk.rq.pid, SIG_FAILURE);
         }
-        free(g_threads);
+        //free(wk.th);
     }
 
     /* Fermeture des descripteurs de fichiers */
@@ -416,10 +418,11 @@ void maind(void) {
     struct worker wks[g_config.DAEMON_WORKER_MAX];
 
     /* Allocation de la liste globale des threads */
-    g_threads = malloc(g_config.DAEMON_WORKER_MAX * sizeof(pthread_t));
-    if (g_threads == NULL) {
-        die("(malloc) failed to malloc for g_threads");
-    }
+    // g_threads = malloc(g_config.DAEMON_WORKER_MAX * sizeof(pthread_t));
+    // if (g_threads == NULL) {
+    //     die("(malloc) failed to malloc for g_threads");
+    // }
+    g_workers = wks;
 
     /* Initialise les workers */
     for (size_t i = 0; i < g_config.DAEMON_WORKER_MAX; i++) {
@@ -435,8 +438,6 @@ void maind(void) {
         if (ret != 0) {
             die("(pthread_create) failed to create worker");
         }
-
-        g_threads[i] = wks[i].th;
     }
 
     syslog(LOG_INFO, "[maind] daemon started with %zu workers",
@@ -455,7 +456,7 @@ void maind(void) {
                 if (sem_post(&wks[i].mutex) == -1) {
                     die("(sem_post) failed to unlock worker %d", wks[i].id);
                 }
-                syslog(LOG_DEBUG, "[maind] unlocked Wk#%d", wks[i].id);
+                syslog(LOG_DEBUG, "[maind] unlocked wk#%02d", wks[i].id);
                 wks[i].avail = false;
                 break;
             }
@@ -463,7 +464,8 @@ void maind(void) {
 
         if (!wk_found) {
             if (kill(rq.pid, SIG_FAILURE) == -1) {
-                die("(kill) failed to send SIGUSR1 to process %d", rq.pid);
+                die("(kill) failed to send %d to process %d", SIG_FAILURE,
+                        rq.pid);
             }
         }
     }
@@ -515,13 +517,13 @@ pid_t retrievepid(void) {
 
 void *wkstart(struct worker *wk) {
     while (1) {
-        syslog(LOG_DEBUG, "[wk#%d] locked (waiting)", wk->id);
+        syslog(LOG_DEBUG, "[wk#%02d] locked (waiting)", wk->id);
         if (sem_wait(&wk->mutex) == -1) {
-            syslog(LOG_ERR, "[wk#%d] sem_wait: failed to lock worker's mutex",
+            syslog(LOG_ERR, "[wk#%02d] sem_wait: failed to lock worker's mutex",
                     wk->id);
         }
 
-        syslog(LOG_DEBUG, "[wk#%d] started running", wk->id);
+        syslog(LOG_DEBUG, "[wk#%02d] started running", wk->id);
 
         int fd;
         int status = EXIT_FAILURE;
@@ -532,33 +534,33 @@ void *wkstart(struct worker *wk) {
 
         switch (fork()) {
         case -1:
-            syslog(LOG_ERR, "[wk#%d] fork: failed to create child (%s)",
+            syslog(LOG_ERR, "[wk#%02d] fork: failed to create child (%s)",
                     wk->id, strerror(errno));
             break;
 
         case 0:
             fd = open(wk->rq.pipe, O_WRONLY);
             if (fd == -1) {
-                syslog(LOG_ERR, "[wk#%d] open: failed to open '%s' (%s)",
+                syslog(LOG_ERR, "[wk#%02d] open: failed to open '%s' (%s)",
                         wk->id, wk->rq.pipe, strerror(errno));
                 exit(EXIT_FAILURE);
             }
 
             if (dup2(fd, STDOUT_FILENO) == -1) {
-                syslog(LOG_ERR, "[wk#%d] dup2: failed to redirect STDOUT (%s)",
+                syslog(LOG_ERR, "[wk#%02d] dup2: failed to redirect STDOUT (%s)",
                         wk->id, strerror(errno));
                 exit(EXIT_FAILURE);
             }
             if (close(fd) == -1) {
-                syslog(LOG_ERR, "[wk#%d] close: failed to close '%s' (%s)",
+                syslog(LOG_ERR, "[wk#%02d] close: failed to close '%s' (%s)",
                         wk->id, wk->rq.pipe, strerror(errno));
             }
 
             strtoargs(wk->rq.cmd, argv, buf);
 
-            syslog(LOG_INFO, "[wk#%d] started job '%s'", wk->id, wk->rq.cmd);
+            syslog(LOG_INFO, "[wk#%02d] started job '%s'", wk->id, wk->rq.cmd);
             execvp(argv[0], argv);
-            syslog(LOG_ERR, "[wk#%d] evecvp: failed to execute '%s' (%s)",
+            syslog(LOG_ERR, "[wk#%02d] evecvp: failed to execute '%s' (%s)",
                 wk->id, wk->rq.cmd, strerror(errno));
             exit(EXIT_FAILURE);
             break;
@@ -568,16 +570,17 @@ void *wkstart(struct worker *wk) {
         }
 
         syslog(status == EXIT_SUCCESS ? LOG_INFO : LOG_ERR,
-                "[Wk#%d] finished job (%lds) with status %d",
+                "[wk#%02d] finished job (%lds) with status %d",
                 wk->id, time(NULL) - tstart, status);
 
         int sig = (status == EXIT_SUCCESS ? SIG_SUCCESS : SIG_FAILURE);
         if (kill(wk->rq.pid, sig) == -1) {
-            syslog(LOG_ERR, "[wk#%d] kill: failed to send signal %d (%s)",
+            syslog(LOG_ERR, "[wk#%02d] kill: failed to send signal %d (%s)",
                     wk->id, sig, strerror(errno));
+        } else {
+            syslog(LOG_DEBUG, "[wk#%02d] sent signal %d to %d",
+                    wk->id, sig, wk->rq.pid);
         }
-        syslog(LOG_DEBUG, "[wk#%d] sent signal %d to %d",
-                wk->id, sig, wk->rq.pid);
 
         wk->avail = true;
     }

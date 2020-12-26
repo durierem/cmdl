@@ -1,11 +1,10 @@
 #!/bin/sh
 
-file='cmdld.conf'
-wk=$(awk '/^DAEMON_WORKER_MAX/ {print $2}' $file)
+n=$(awk '/^DAEMON_WORKER_MAX/ {print $2}' 'cmdld.conf')
 
-for i in $(seq 1 $wk)
+for i in $(seq 1 $n)
 do
-	t=$((i * 2))
-	echo "[$i/$wk] sleep $t"
-	./cmdl "sleep $t" & 
+	cmd="sleep $((i * 2))"
+	echo "[$i/$n] $cmd"
+	./cmdl "$cmd" & 
 done
