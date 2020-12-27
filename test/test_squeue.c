@@ -116,6 +116,7 @@ int main(void) {
         }
     }
 
+    wait(NULL);
     assert(sq_apply(q, (int (*)(void *)) dummy_display) == 0);
     assert(sq_length(q) == SQ_LENGTH);
 

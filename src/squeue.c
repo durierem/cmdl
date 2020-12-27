@@ -166,12 +166,26 @@ int sq_dequeue(SQueue sq, void *buf) {
     return FUN_SUCCESS;
 }
 
-size_t sq_length(const SQueue sq) {
-    return sq->length;
+ssize_t sq_length(const SQueue sq) {
+    if (sem_wait(&sq->mshm) == -1) {
+        return FUN_FAILURE;
+    }
+
+    ssize_t res = (ssize_t) sq->length;
+
+    if (sem_post(&sq->mshm) == -1) {
+        return FUN_FAILURE;
+    }
+
+    return res;
 }
 
 int sq_apply(SQueue sq, int (*fun)(void *)) {
     if (sq == NULL) {
+        return FUN_FAILURE;
+    }
+
+    if (sem_wait(&sq->mshm) == -1) {
         return FUN_FAILURE;
     }
 
@@ -185,6 +199,10 @@ int sq_apply(SQueue sq, int (*fun)(void *)) {
         i = (i + 1) % sq->max_length;
         e = sq->data + i * sq->size;
     } while (i != sq->tail);
+
+    if (sem_post(&sq->mshm) == -1) {
+        return FUN_FAILURE;
+    }
 
     return FUN_SUCCESS;
 }

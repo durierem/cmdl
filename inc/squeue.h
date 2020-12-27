@@ -67,7 +67,7 @@ extern int sq_dequeue(SQueue sq, void *buf);
  * @param   sq  La file à utilser.
  * @return      La longueur de la file.
  */
-extern size_t sq_length(const SQueue sq);
+extern ssize_t sq_length(const SQueue sq);
 
 /**
  * Applique la fonction fun sur tous les éléments de la file sq.

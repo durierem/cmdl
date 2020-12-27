@@ -175,9 +175,9 @@ void strtoargs(const char *str, char *argv[], char *buf);
 
 /* --- MAIN ---------------------------------------------------------------- */
 
-static SQueue g_queue;          /* La file en mémoire partagée */
-static struct config g_config;  /* La configuration du daemon */
-static struct worker *g_workers;    /* Liste des threads associés aux workers */
+static SQueue g_queue;              /* La file en mémoire partagée */
+static struct config g_config;      /* La configuration du daemon */
+static struct worker *g_workers;    /* Liste des workers */
 
 int main(int argc, char *argv[]) {
     /* Affiche l'aide si les options sont incorrectes */
@@ -277,7 +277,6 @@ void cleanup(void) {
             pthread_join(wk.th, NULL);
             kill(wk.rq.pid, SIG_FAILURE);
         }
-        //free(wk.th);
     }
 
     /* Fermeture des descripteurs de fichiers */
@@ -353,7 +352,6 @@ void daemonise(const char *pipename) {
         die("storepid");
 }
 
-
 /* Note : l'appel à sem_unlink() est relégué à la fonction unlock().
  * Cela permet de garder le sémaphore en mémoire pour permettre à
  * d'autres processus de l'ouvrir.
@@ -416,12 +414,6 @@ void maind(void) {
 
     /* Tableau des workers */
     struct worker wks[g_config.DAEMON_WORKER_MAX];
-
-    /* Allocation de la liste globale des threads */
-    // g_threads = malloc(g_config.DAEMON_WORKER_MAX * sizeof(pthread_t));
-    // if (g_threads == NULL) {
-    //     die("(malloc) failed to malloc for g_threads");
-    // }
     g_workers = wks;
 
     /* Initialise les workers */
