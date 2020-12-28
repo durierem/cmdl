@@ -59,8 +59,8 @@ $ journalctl -f --identifier=cmdld --priority=6
 
 Note : changer la priorité à 7 permet d'afficher les messages de debug.
 
-Le script `test/test.sh` lance X commandes `sleep`, X étant le nombre de
-workers du daemon.
+Le script `test/test.sh` lance X commandes `sleep` en parallèle, X étant le
+nombre de workers du daemon.
 
 Exemple de logs après avoir configuré le daemon avec 4 workers, lancé
 `sh test/test.sh` et demandé l'exécution de `echo 'hello world'` en parallèle :

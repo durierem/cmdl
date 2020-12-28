@@ -1,24 +1,30 @@
-\#TODO : sigalarm daemon
+---
+title: Command Launcher - Manuel technique
+author: Rémi DURIEU / Thomas EVRARD
+date: Décembre 2020
+---
 
 # Arborescence du projet
 
-    .
-    |-- cmdl.c              # Sources du client
-    |-- cmdld.c             # Sources du daemon
-    |-- cmdld.conf          # Fichier de configuration du daemon
-    |-- inc                 # -- Répertoire contenant les en-têtes des modules
-    |   |-- common.h        # Définitions communes utilisées par le client et le daemon
-    |   |-- config.h        # En-tête du module de configuration
-    |   |-- squeue.h        # En-tête du module de file synchronisée
-    |-- LICENSE             # Licence MIT
-    |-- Makefile            # Makefile
-    |-- README.md           # README
-    |-- src                 # -- Répertoire contenant les sources des modules
-    |   |-- config.c        # Sources du module de configuration
-    |   |-- squeue.c        # Sources du module de file synchronisée
-    |-- test                # -- Répertoire contenant les sources des programmes de test
-        |-- test.sh         # Script shell de test global
-        |-- test_squeue.c   # Programme de test du module de file synchronisée
+```
+.
+|-- cmdl.c              # Sources du client
+|-- cmdld.c             # Sources du daemon
+|-- cmdld.conf          # Fichier de configuration du daemon
+|-- inc                 # -- Répertoire contenant les en-têtes des modules
+|   |-- common.h        # Définitions communes utilisées par le client et le daemon
+|   |-- config.h        # En-tête du module de configuration
+|   |-- squeue.h        # En-tête du module de file synchronisée
+|-- LICENSE             # Licence MIT
+|-- Makefile            # Makefile
+|-- README.md           # README
+|-- src                 # -- Répertoire contenant les sources des modules
+|   |-- config.c        # Sources du module de configuration
+|   |-- squeue.c        # Sources du module de file synchronisée
+|-- test                # -- Répertoire contenant les sources des programmes de test
+    |-- test.sh         # Script shell de test global
+    |-- test_squeue.c   # Programme de test du module de file synchronisée
+```
 
 # File synchronisée
 
@@ -39,10 +45,13 @@ précisant le nom de l'objet mémoire partagée.
 
 Pour garantir l'accès unique à la mémoire partagée, les fonctions du
 module font appel à un mécanisme d'exclusion mutuelle (mutex `mshm` dans
-la structure privée `__squeue`). De plus les fonctions `sq_enqueue()` et
-`sq_dequeue()` utilisent des sémaphores pour assurer le blocage du
-processus en cas d'enfilage d'une file pleine (sémaphore `mnfull`) ou de
-défilage d'une file vide (sémaphore `mnempty`).
+la structure privée `__squeue`).
+
+L'enfilage et le défilage de données est analogue au problème du
+producteur/consommateur : les fonctions `sq_enqueue()` et `sq_dequeue()`
+utilisent des sémaphores pour assurer le blocage du processus en cas
+d'enfilage d'une file pleine (sémaphore `mnfull`) ou de défilage d'une
+file vide (sémaphore `mnempty`).
 
 Les données enfilées sont entièrement copiées dans la file et la zone
 mémoire utilisée est un tableau d'octets à taille variable défini en fin
@@ -88,7 +97,8 @@ La file synchronisée préalablement créée par le daemon est ouverte, la
 requête est enfilée, et le tube de communication est créé et ouvert, ce
 qui a pour effet de bloquer le processus jusqu'à ce que le daemon prenne
 en charge la requête et ouvre à son tour le tube, ou qu'un `SIG_FAILURE`
-interrompe l'attente.
+interrompe l'attente. Après affichage sur la sortie standard, le client se
+place en attente d'un `SIG_SUCCESS` avant de se terminer.
 
 # Daemon (`cmdld.c`)
 
@@ -106,10 +116,10 @@ daemon afin de lui envoyer un signal de terminaison `SIGTERM`.
 
 ## Configuration
 
-Le module de configuration (`config.h` et `config.c`) permet de lire le
-contenu du fichier `cmdld.conf`. Ce dernier contient la longueur
-maximale de la [file synchronisée](#file-synchronisée), ainsi que le
-nombre de [workers](#workers).
+Le module de configuration permet de lire le contenu du fichier `cmdld.conf`.
+Ce dernier contient la longueur maximale de la
+[file synchronisée](#file-synchronisée), ainsi que le nombre de
+[workers](#workers).
 
 Dans `cmdld.conf` Les clés et les valeurs sont séparées par une ou
 plusieurs tabulations et les lignes commençant par le caractère `#` sont
@@ -128,15 +138,42 @@ Le processus de daemonisation a été implanté tel que décrit sur
 (en omettant les étapes optionnelles). C'est la fonction `daemonise()`
 qui se charge de l'opération.
 
-À la fin du processus, la fonction `maind()` est exécutée. Elle contient
-les étapes d'intitialisation du daemon ainsi que sa boucle principale.
+Afin de confirmer la daemonisation, le processus parent attend un signal
+`SIG_SUCCESS` en provenance du daemon. Si celui-ci n'arrive pas dans les 5
+secondes, la daemonisation est considérée comme échouée et le processus
+s'arrête.
 
-## Workers
+À la fin de la daemonisation, la fonction `maind()` est exécutée. Elle contient
+les étapes d'intitialisation du daemon ainsi que sa boucle principale.
 
 ## Traitement des requêtes
 
+Le daemon est dans une boucle infinie bloquée par `sq_dequeue()` lorsque la
+file de resquêtes est vide. Lorsqu'une requête est enfilée par un client puis
+défilé par le daemon, ce dernier recherche le premier worker libre, lui confie
+la requête et le débloque. Si aucun workers libre n'a été trouvé, il envoie un
+signal `SIG_FAILURE` au client.
+
+## Workers et exécution de la commande
+
+Au démarrage du daemon, les workers sont initialisés et les threads qui leur
+sont associés sont lancés avec la fonction de démarrage `wkstart()`. Cette
+fonction lance une boucle infinie bloquante à chaque itération. Lors du
+[traitement des requêtes](#traitement-des-reequêtes), le daemon débloque le
+thread associé à un worker ce qui permet à ce dernier de traiter la commande
+présente à ce moment là dans la structure `struct worker` qui lui est associée.
+
+Lorsque la commande lancée par un worker a terminé de s'exécuter, ce dernier
+envoie un signal `SIG_SUCCESS` ou `SIG_FAILURE` au client en fonction
+du statut de la commande. Le worker en question est alors à nouveau disponible
+et bloque son thread en attendant une nouvelle requête.
+
 # Pistes d'améliorations
 
--   Signaux plus précis dans le cas d'un échec de commandes
--   Redémarrage du daemon à la réception d'un `SIGHUP`
+- Signaux plus précis dans le cas d'un échec de commande
+    - Utilisation des signaux temps rééls ?
+- Redémarrage du daemon à la réception d'un `SIGHUP`
+    - Recharger le fichier de configuration
+    - Envoyer `SIG_FAILURE` aux clients dont les commandes sont en cours de
+    traitement (mise à profit de `sq_apply()`) ?
 
