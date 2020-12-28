@@ -1,13 +1,14 @@
 # Makefile
-# --------
 
-# Compilateur
-CC = gcc
+# --- VARIABLES ---------------------------------------------------------------
 
-# Répertoires 
+# Répertoires
 srcdir = src
 incdir = inc
 testdir = test
+
+# Compilateur
+CC = gcc
 
 # Options obligatoires pour la compilation correcte
 MCFLAGS = -D_XOPEN_SOURCE=500 -I$(incdir) -pthread
@@ -27,12 +28,18 @@ objects = cmdl.o cmdld.o $(srcdir)/squeue.o $(srcdir)/config.o \
 # Liste des exécutables finaux
 executables = cmdl cmdld
 tests = $(testdir)/test_squeue
+docs = README.pdf MANUAL.pdf
 
-# Cible par défaut
-all: $(executables)
+# --- CIBLES ------------------------------------------------------------------
 
-# Programme(s) de test
+default: $(executables)
 test: $(tests)
+doc: $(docs) # (requiert pandoc)
+all: $(executables) $(tests) $(docs)
+clean:
+	$(RM) $(objects) $(executables) $(tests) $(docs)
+
+# --- RÈGLES ------------------------------------------------------------------
 
 cmdl: cmdl.o $(srcdir)/squeue.o
 	$(CC) $^ $(LDFLAGS) -o $@
@@ -40,10 +47,8 @@ cmdld: cmdld.o $(srcdir)/squeue.o $(srcdir)/config.o
 	$(CC) $^ $(LDFLAGS) -o $@
 $(testdir)/test_squeue: $(testdir)/test_squeue.o $(srcdir)/squeue.o
 	$(CC) $^ $(LDFLAGS) -o $@
-
-# Nettoyage des fichiers créés par la compilation
-clean:
-	$(RM) $(objects) $(executables) $(tests)
+$(docs):
+	pandoc -V geometry:margin=1in --pdf-engine=xelatex $^ -o $@
 
 # Dépendances des fichiers objets (règles implicites)
 cmdl.o: cmdl.c $(incdir)/common.h $(incdir)/squeue.h
@@ -51,3 +56,6 @@ cmdld.o: cmdld.c $(incdir)/common.h $(incdir)/squeue.h $(incdir)/config.h
 config.o: $(srcdir)/config.c $(incdir)/config.h
 squeue.o: $(srcdir)/squeue.c $(incdir)/squeue.h
 test_squeue.o: $(srcdir)/squeue.c $(incdir)/squeue.h
+
+README.pdf: README.md
+MANUAL.pdf: MANUAL.md
