@@ -1,29 +1,10 @@
-# Command Launcher
+---
+title: Command Launcher - Manuel d'utilisation
+author: Rémi DURIEU / Thomas EVRARD
+date: Décembre 2020
+---
 
-## Arborescence du projet
-
-```
-.
-|-- cmdl.c                      # Sources du client
-|-- cmdld.c                     # Sources du daemon
-|-- cmdld.conf                  # Fichier de configuration du daemon
-|-- inc                         # -- Répertoire contenant les en-têtes des modules
-|   |-- common.h                # Définitions communes utilisées par le client et le daemon
-|   |-- config.h                # En-tête du module de configuration
-|   |-- squeue.h                # En-tête du module de file synchronisée
-|-- LICENSE                     # Licence MIT
-|-- Makefile                    # Makefile
-|-- README.md                   # README
-|-- src                         # -- Répertoire contenant les sources des modules
-|   |-- config.c                # Sources du module de configuration
-|   |-- squeue.c                #  Sources du module de file synchronisée
-|-- test                        # -- Répertoire contenant les sources des programmes de test
-    |-- test.sh                 # Script shell de test global
-    |-- test_squeue.c           # Programme de test du module de file synchronisée
-
-```
-
-## Compilation
+# Compilation
 
 La cible par défaut de `make` est le client (`cmdl`) et le daemon (`cmdld`).
 Il est aussi possible de compiler le programme de test de la file synchronisée.
@@ -33,26 +14,26 @@ $ make
 $ make test
 ```
 
-`cmdl` et `cmdld` se trouvent à la racine du projet, tandis que `test_squeue`
-reste dans le répertoire dédié aux tests.
+Les exécutables `cmdl` et `cmdld` se trouvent à la racine du projet, tandis que
+`test_squeue` reste dans le répertoire dédié aux tests.
 
-## Configuration du daemon
+# Configuration du daemon
 
 Le nombre de workers et la taille maximale de la file synchronisée peuvent être
 modifiés au travers du fichier de configuration `cmdld.conf`.
 
-## Utilisation
+# Utilisation
 
 Le daemon peut être lancé et arrêté avec les commandes :
 
-```
+```sh
 $ ./cmdld start
 $ ./cmdld stop
 ```
 
 Les clients peuvent maintenant envoyer des commandes :
 
-```
+```sh
 $ ./cmdl 'pwd'
 $ ./cmdl 'sleep 5'
 ```
@@ -60,19 +41,19 @@ $ ./cmdl 'sleep 5'
 Il est possible d'envoyer des commandes plus complexes en passant par un shell.
 Par exemple avec bash : 
 
-```
+```sh
 $ ./cmdl 'bash -c -- for x in $(seq 10); do echo $x; done'
 $ ./cmdl 'bash -c -- echo $SHELL && whoami'
 ```
 
-## Tester le programme
+# Tester le programme
 
 Puisque le daemon est détaché de tout terminal, il affiche des informations au
 moyen de logs systèmes (`syslog`). Sur un système utilisant `systemd` (la
 plupart des distributions Linux modernes), ces logs sont gérés avec la commande
 `journalctl`. Pour suivre en temps réél les logs du daemon :
 
-```
+```sh
 $ journalctl -f --identifier=cmdld --priority=6
 ```
 
