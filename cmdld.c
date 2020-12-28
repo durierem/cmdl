@@ -256,9 +256,15 @@ int main(int argc, char *argv[]) {
     if (sigaction(SIGTERM, &act, NULL) == -1) {
         die("sigaction");
     }
+    if (sigaction(SIG_SUCCESS, &act, NULL) == -1) {
+        die("sigaction");
+    }
 
     /* Laisse passer SIGALRM */
     if (sigdelset(&set, SIGALRM) == -1) {
+        die("sigdelset");
+    }
+    if (sigdelset(&set, SIG_SUCCESS) == -1) {
         die("sigdelset");
     }
     if (sigprocmask(SIG_SETMASK, &set, NULL) == -1) {
@@ -266,7 +272,6 @@ int main(int argc, char *argv[]) {
     }
 
     /* "fork off and die" */
-    int fdpipe;
     switch (fork()) {
     case -1:
         die("fork");
@@ -278,18 +283,11 @@ int main(int argc, char *argv[]) {
         exit(EXIT_SUCCESS);
         
     default:
+        /* Envoie une alarme si le daemon n'a pas contacté dans les 5 sec */
         alarm(5);
-        fdpipe = open(pipename, O_RDONLY);
-        if (fdpipe == -1) {
-            die("open");
-        }
-
-        if (unlink(pipename) == -1) {
-            die("unlink");
-        }
-
-        if (close(fdpipe) == -1) {
-            die("close");
+        sigsuspend(&set);
+        if (errno != EINTR) {
+            die("sigsuspend");
         }
     }
 
@@ -326,7 +324,8 @@ void cleanup(void) {
 
 void die(const char *format, ...) {
     /* Garde le code d'erreur initial si une autre erreur survient */
-    int errcode = errno; 
+    int errcode = errno;
+    const char *strerr = strerror(errcode);
 
     va_list args;
     va_start(args, format);
@@ -334,8 +333,8 @@ void die(const char *format, ...) {
     vsnprintf(msg, sizeof(msg), format, args);
     va_end(args);
 
-    syslog(LOG_ERR, "[maind] daemon died: '%s', errno=%d '%s'",
-            msg, errcode, strerror(errcode));
+    fprintf(stderr, "Error: daemon died '%s' (%s)", msg, strerr);
+    syslog(LOG_ERR, "[maind] daemon died: '%s' (%s)", msg, strerr);
 
     cleanup();
     exit(EXIT_FAILURE);
@@ -379,11 +378,8 @@ void daemonise(const char *pipename) {
         die("storepid");
 
     /* Contacte le processus parent pour confirmer la daemonisation */
-     fd = open(pipename, O_WRONLY);
-     if (fd == -1)
-         die("open");
-     if (close(fd) == -1)
-        die("close");
+    if (kill(getppid(), SIG_SUCCESS) == -1)
+       die("kill");
 }
 
 /* Note : l'appel à sem_unlink() est relégué à la fonction unlock().
@@ -448,6 +444,12 @@ void maind(void) {
             die("(sem_init) failed to initialise worker's mutex");
         }
 
+        /* Assure la présence d'une valeur dans le champ pid pour que la
+         * fonction cleanup() effectue des envois de signaux corrects dans le
+         * cas où tout les workers n'auraient pas été utilisés; ceci afin de ne 
+         * pas mécontenter valgrind. */
+        wks[i].rq.pid = 0;
+
         int ret = pthread_create(&wks[i].th, NULL,
                 (void *(*)(void *)) wkstart, &wks[i]);
         if (ret != 0) {
@@ -494,9 +496,7 @@ void sighandler(int sig) {
     }
 
     if (sig == SIGALRM) {
-        fprintf(stderr, "Error: failed to start daemon (exceeded delay)\n");
-        unlock();
-        exit(EXIT_FAILURE);
+        die("failed to start");
     }
 }
 
