@@ -81,6 +81,8 @@ extern int sq_apply(SQueue sq, int (*fun)(void *));
 /**
  * Libère les ressources allouées pour la file pointée par sqp.
  *
+ * Le pointeur sqp est fixé à NULL à la fin de l'opération.
+ *
  * @param   sqp     Un pointeur vers la file à libérer.
  */
 extern void sq_dispose(SQueue *sqp);

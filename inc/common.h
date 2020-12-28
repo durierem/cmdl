@@ -6,12 +6,12 @@
 /* Nom associé au SHM pour stocker la file */
 #define SHM_QUEUE "/cmdl_shm_queue"
 
-/* Longueur maximale de l'argument aux fonction exec (possiblement défini) */
+/* Longueur maximale de l'argument aux fonction exec (possiblement définie) */
 #ifndef ARG_MAX
 #define ARG_MAX 2048
 #endif
 
-/* Longueur maximale pour les noms de chemins (possiblement défini) */
+/* Longueur maximale pour les noms de chemins (possiblement définie) */
 #ifndef PATH_MAX
 #define PATH_MAX 2048
 #endif
