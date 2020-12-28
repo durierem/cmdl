@@ -234,6 +234,37 @@ int main(int argc, char *argv[]) {
         die("mkfifo");
     }
 
+    /* Bloque tous les signaux pendant l'intitialisation */
+    sigset_t set;
+    if (sigfillset(&set) == -1) {
+        die("sigfillset");
+    }
+    if (sigprocmask(SIG_SETMASK, &set, NULL) == -1) {
+        die("sigprocmask");
+    }
+
+    /* Affecte SIGALRM et SIGTERM */
+    struct sigaction act;
+    act.sa_handler = sighandler;
+    act.sa_flags = 0;
+    if (sigfillset(&act.sa_mask) == -1) {
+        die("sigfillset");
+    }
+    if (sigaction(SIGALRM, &act, NULL) == -1) {
+        die("sigaction");
+    }
+    if (sigaction(SIGTERM, &act, NULL) == -1) {
+        die("sigaction");
+    }
+
+    /* Laisse passer SIGALRM */
+    if (sigdelset(&set, SIGALRM) == -1) {
+        die("sigdelset");
+    }
+    if (sigprocmask(SIG_SETMASK, &set, NULL) == -1) {
+        die("sigprocmask");
+    }
+
     /* "fork off and die" */
     int fdpipe;
     switch (fork()) {
@@ -247,9 +278,7 @@ int main(int argc, char *argv[]) {
         exit(EXIT_SUCCESS);
         
     default:
-        /* open() bloquant jusqu'au contact par le daemon
-         *  -> possibilité de blocage infini
-         *  -> utiliser un timer en parallèle ? */
+        alarm(5);
         fdpipe = open(pipename, O_RDONLY);
         if (fdpipe == -1) {
             die("open");
@@ -264,6 +293,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    return EXIT_SUCCESS;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -286,7 +316,10 @@ void cleanup(void) {
         }
     }
 
-    sq_dispose(&g_queue);
+    if (g_queue != NULL) {
+        sq_dispose(&g_queue);
+    }
+
     shm_unlink(DAEMON_SHM_PID);
     unlock();
 }
@@ -316,6 +349,7 @@ void usage(void) {
 /* ------------------------------------------------------------------------- */
 
 void daemonise(const char *pipename) {
+    printf("%s", pipename);
     /* Détache le daemon de la session actuelle */
     if (setsid() == -1)
         die("setsid");
@@ -339,17 +373,17 @@ void daemonise(const char *pipename) {
         die("dup2");
     if (close(fd) == -1)
         die("close");
-    
-    /* Contacte le processus parent pour confirmer la daemonisation */
-    fd = open(pipename, O_WRONLY);
-    if (fd == -1)
-        die("open");
-    if (close(fd) == -1)
-        die("close");
 
     /* Stocke le PID pour être contacté plus tard par un SIGTERM */
     if (storepid() == -1)
         die("storepid");
+
+    /* Contacte le processus parent pour confirmer la daemonisation */
+     fd = open(pipename, O_WRONLY);
+     if (fd == -1)
+         die("open");
+     if (close(fd) == -1)
+        die("close");
 }
 
 /* Note : l'appel à sem_unlink() est relégué à la fonction unlock().
@@ -382,17 +416,6 @@ int unlock(void) {
 }
 
 void maind(void) {
-    /* Affecte sighandler() à la gestion de SIGTERM */
-    struct sigaction act;
-    act.sa_handler = sighandler;
-    act.sa_flags = 0;
-    if (sigfillset(&act.sa_mask) == -1) {
-        die("sigfillset");
-    }
-    if (sigaction(SIGTERM, &act, NULL) == -1) {
-        die("sigaction");
-    }
-    
     /* Masque tous les signaux sauf SIGTERM */
     sigset_t masked;
     if (sigfillset(&masked) == -1) {
@@ -468,6 +491,12 @@ void sighandler(int sig) {
         cleanup();
         syslog(LOG_INFO, "[maind] daemon terminated");
         exit(EXIT_SUCCESS);
+    }
+
+    if (sig == SIGALRM) {
+        fprintf(stderr, "Error: failed to start daemon (exceeded delay)\n");
+        unlock();
+        exit(EXIT_FAILURE);
     }
 }
 
