@@ -1,7 +1,13 @@
 ---
-title: Command Launcher - Manuel technique
-author: Rémi DURIEU / Thomas EVRARD
+lang: fr-FR
+title: Command Launcher
+subtitle: Manuel technique
+author:
+    - Rémi DURIEU
+    - Thomas EVRARD
 date: Décembre 2020
+documentclass: report
+fontsize: 12
 ---
 
 # Arborescence du projet

@@ -1,7 +1,13 @@
 ---
-title: Command Launcher - Manuel d'utilisation
-author: Rémi DURIEU / Thomas EVRARD
+lang: fr-FR
+title: Command Launcher
+subtitle: Manuel d'utilisation
+author:
+    - Rémi DURIEU
+    - Thomas EVRARD
 date: Décembre 2020
+documentclass: report
+fontsize: 12
 ---
 
 # Compilation

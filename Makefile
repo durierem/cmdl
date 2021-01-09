@@ -48,7 +48,7 @@ cmdld: cmdld.o $(srcdir)/squeue.o $(srcdir)/config.o
 $(testdir)/test_squeue: $(testdir)/test_squeue.o $(srcdir)/squeue.o
 	$(CC) $^ $(LDFLAGS) -o $@
 $(docs):
-	pandoc -V geometry:margin=1in --pdf-engine=xelatex $^ -o $@
+	pandoc --pdf-engine=xelatex $^ -o $@
 
 # Dépendances des fichiers objets (règles implicites)
 cmdl.o: cmdl.c $(incdir)/common.h $(incdir)/squeue.h
